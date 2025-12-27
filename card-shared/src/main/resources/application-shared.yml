@@ -1,0 +1,15 @@
+# Configuración compartida
+security:
+  encryption:
+    # En producción, esto debe venir de un vault (AWS Secrets Manager, etc)
+    key: ${ENCRYPTION_KEY:MySecretKey32BytesForAES256Key!!}
+
+  hashing:
+    bcrypt-strength: 12
+
+# Logging
+logging:
+  level:
+    com.credicoop.card.shared: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"

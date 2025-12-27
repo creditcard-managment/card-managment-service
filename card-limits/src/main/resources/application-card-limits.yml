@@ -1,0 +1,144 @@
+# =============================================
+# Card Limits Module Configuration
+# Module: card-limits
+# =============================================
+
+spring:
+  application:
+    name: card-limits-service
+
+  # =============================================
+  # Database Configuration
+  # =============================================
+  datasource:
+    url: jdbc:postgresql://localhost:5432/card_management_db
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+
+    # HikariCP Configuration
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000      # 30 seconds
+      idle-timeout: 600000           # 10 minutes
+      max-lifetime: 1800000          # 30 minutes
+      auto-commit: true
+      pool-name: CreditLimitHikariCP
+
+  # =============================================
+  # JPA/Hibernate Configuration
+  # =============================================
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    show-sql: false
+    hibernate:
+      ddl-auto: validate  # Flyway maneja las migraciones
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+        jdbc:
+          batch_size: 20
+          fetch_size: 50
+        order_inserts: true
+        order_updates: true
+        generate_statistics: false
+
+  # =============================================
+  # Flyway Configuration
+  # =============================================
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+    schemas: public
+    table: flyway_schema_history_card_limits
+    validate-on-migrate: true
+    clean-disabled: true
+
+# =============================================
+# Server Configuration
+# =============================================
+server:
+  port: 8082
+  servlet:
+    context-path: /
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: on_param
+    include-exception: false
+
+# =============================================
+# Logging Configuration
+# =============================================
+logging:
+  level:
+    root: INFO
+    com.unisono.card.limits: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    org.springframework.jdbc.core: DEBUG
+    com.zaxxer.hikari: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/card-limits.log
+    max-size: 10MB
+    max-history: 30
+
+# =============================================
+# Actuator Configuration
+# =============================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  health:
+    db:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# =============================================
+# SpringDoc OpenAPI Configuration
+# =============================================
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+  show-actuator: true
+
+# =============================================
+# Custom Application Properties
+# =============================================
+credit-limits:
+  # Límites por defecto
+  defaults:
+    daily-limit: 100000.00
+    monthly-limit: 500000.00
+    cash-advance-percentage: 0.30
+
+  # Validaciones
+  validation:
+    min-purchase-limit: 1000.00
+    max-purchase-limit: 10000000.00
+    strict-mode: true
+
+  # Auditoría
+  audit:
+    enabled: true
+    retention-days: 365
