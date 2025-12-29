@@ -3,8 +3,7 @@ package com.unisono.card.data.infrastructure.adapter.output.persistence.mapper;
 import com.unisono.card.data.domain.model.*;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.entity.CardEntity;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.entity.CardHolderEmbeddable;
-import com.unisono.card.shared.domain.valueobject.CardId;
-import com.unisono.card.shared.domain.valueobject.ClientId;
+import com.unisono.card.shared.domain.valueobject.*;
 import org.springframework.stereotype.Component;
 
 import java.time.YearMonth;

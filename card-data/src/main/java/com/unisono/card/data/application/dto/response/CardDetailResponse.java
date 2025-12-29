@@ -1,7 +1,7 @@
 package com.unisono.card.data.application.dto.response;
 
 import com.unisono.card.data.domain.model.CardCategory;
-import com.unisono.card.data.domain.model.CardStatus;
+import com.unisono.card.shared.domain.valueobject.CardStatus;
 import com.unisono.card.data.domain.model.CardType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;

@@ -1,9 +1,8 @@
 package com.unisono.card.data.domain.model;
 
+import com.unisono.card.shared.domain.valueobject.*;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.exception.ValidationException;
-import com.unisono.card.shared.domain.valueobject.CardId;
-import com.unisono.card.shared.domain.valueobject.ClientId;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;

@@ -42,7 +42,7 @@ public class CardUseCaseConfig {
      * PINManagementService implementa:
      * - ValidatePINUseCase
      * - ResetPINUseCase
-     */
+
     @Bean
     public PINManagementService pinManagementService(
             CardRepository cardRepository,
@@ -50,6 +50,7 @@ public class CardUseCaseConfig {
     ) {
         return new PINManagementService(cardRepository, encryptionPort);
     }
+     */
 
     /**
      * CardValidationService (servicio auxiliar)

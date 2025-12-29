@@ -1,87 +1,43 @@
-# =============================================
-# Main Application Configuration
-# =============================================
-
 spring:
-  profiles:
-    active: dev
-
-  # Import module-specific configs
-  config:
-    import:
-      - optional:classpath:application-card-limits.yml
-
----
-# =============================================
-# Development Profile
-# =============================================
-spring:
-  config:
-    activate:
-      on-profile: dev
-
+  application:
+    name: card-limits
+  
   datasource:
     url: jdbc:postgresql://localhost:5432/card_management_db
-    username: postgres
-    password: postgres
-
+    username: card_user
+    password: card_pass
+    driver-class-name: org.postgresql.Driver
+    
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+  
   jpa:
+    hibernate:
+      ddl-auto: validate
     show-sql: true
     properties:
       hibernate:
-        format_sql: true
-
-logging:
-  level:
-    com.unisono.card.limits: DEBUG
-
----
-# =============================================
-# Test Profile
-# =============================================
-spring:
-  config:
-    activate:
-      on-profile: test
-
-  datasource:
-    url: jdbc:postgresql://localhost:5432/card_management_test_db
-    username: postgres
-    password: postgres
-
-  jpa:
-    hibernate:
-      ddl-auto: create-drop
-
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  
   flyway:
     enabled: false
 
----
-# =============================================
-# Production Profile
-# =============================================
-spring:
-  config:
-    activate:
-      on-profile: prod
+server:
+  port: 8082  # ✅ Puerto diferente
 
-  datasource:
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
-    hikari:
-      maximum-pool-size: 20
-      minimum-idle: 10
+encryption:
+  secret-key: "MySecretKey32BytesForAES256!!123" # ⚠️ CAMBIAR EN PRODUCCIÓN (exactamente 32 caracteres)
 
-  jpa:
-    show-sql: false
-    properties:
-      hibernate:
-        generate_statistics: false
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
 
 logging:
   level:
-    root: WARN
-    com.unisono.card.limits: INFO
-  file:
-    name: /var/log/card-management/card-limits.log
+    com.unisono.card: DEBUG

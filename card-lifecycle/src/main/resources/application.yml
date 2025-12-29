@@ -1,0 +1,89 @@
+# =============================================
+# Main Application Configuration
+# =============================================
+
+spring:
+  profiles:
+    active: dev
+
+  # Import module-specific configs
+  config:
+    import:
+      - optional:classpath:application-card-lifecycle.yml
+
+---
+# =============================================
+# Development Profile
+# =============================================
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/card_management_db
+    username: postgres
+    password: postgres
+
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+logging:
+  level:
+    com.unisono.card.lifecycle: DEBUG
+    org.springframework.statemachine: DEBUG
+
+---
+# =============================================
+# Test Profile
+# =============================================
+spring:
+  config:
+    activate:
+      on-profile: test
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/card_management_test_db
+    username: postgres
+    password: postgres
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+
+  flyway:
+    enabled: false
+
+---
+# =============================================
+# Production Profile
+# =============================================
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 10
+
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        generate_statistics: false
+
+logging:
+  level:
+    root: WARN
+    com.unisono.card.lifecycle: INFO
+    org.springframework.statemachine: INFO
+  file:
+    name: /var/log/card-management/card-lifecycle.log

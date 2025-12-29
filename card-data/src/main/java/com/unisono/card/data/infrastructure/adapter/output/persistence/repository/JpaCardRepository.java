@@ -1,6 +1,6 @@
 package com.unisono.card.data.infrastructure.adapter.output.persistence.repository;
 
-import com.unisono.card.data.domain.model.CardStatus;
+import com.unisono.card.shared.domain.valueobject.CardStatus;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.entity.CardEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;

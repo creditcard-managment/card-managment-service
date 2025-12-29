@@ -1,7 +1,7 @@
 package com.unisono.card.data.domain.service;
 
 import com.unisono.card.data.domain.model.Card;
-import com.unisono.card.data.domain.model.CardStatus;
+import com.unisono.card.shared.domain.valueobject.CardStatus;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

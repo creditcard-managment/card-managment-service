@@ -1,7 +1,7 @@
 package com.unisono.card.data.infrastructure.adapter.output.persistence.entity;
 
 import com.unisono.card.data.domain.model.CardCategory;
-import com.unisono.card.data.domain.model.CardStatus;
+import com.unisono.card.shared.domain.valueobject.CardStatus;
 import com.unisono.card.data.domain.model.CardType;
 import jakarta.persistence.*;
 import lombok.*;

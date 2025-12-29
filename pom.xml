@@ -33,7 +33,6 @@
         <!-- Database -->
         <postgresql.version>42.7.1</postgresql.version>
         <hikari.version>5.1.0</hikari.version>
-        <flyway.version>10.4.1</flyway.version>
 
         <!-- Messaging -->
         <kafka.version>3.6.1</kafka.version>
@@ -71,6 +70,7 @@
         <module>card-shared</module>
         <module>card-data</module>
         <module>card-limits</module>
+        <module>card-lifecycle</module>
     </modules>
 
     <!-- DEPENDENCY MANAGEMENT (versiones centralizadas) -->
@@ -90,6 +90,11 @@
             <dependency>
                 <groupId>com.unisono.card</groupId>
                 <artifactId>card-limits</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.unisono.card</groupId>
+                <artifactId>card-lifecycle</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <!-- Spring Boot BOM -->
@@ -113,18 +118,6 @@
                 <groupId>com.zaxxer</groupId>
                 <artifactId>HikariCP</artifactId>
                 <version>${hikari.version}</version>
-            </dependency>
-
-            <!-- Flyway (migraciones DB) -->
-            <dependency>
-                <groupId>org.flywaydb</groupId>
-                <artifactId>flyway-core</artifactId>
-                <version>${flyway.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.flywaydb</groupId>
-                <artifactId>flyway-database-postgresql</artifactId>
-                <version>${flyway.version}</version>
             </dependency>
 
             <!-- Kafka -->

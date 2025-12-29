@@ -1,0 +1,153 @@
+# =============================================
+# Card Lifecycle Module Configuration
+# Module: card-lifecycle
+# =============================================
+
+spring:
+  application:
+    name: card-lifecycle-service
+
+  # =============================================
+  # Database Configuration
+  # =============================================
+  datasource:
+    url: jdbc:postgresql://localhost:5432/card_management_db
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+
+    # HikariCP Configuration
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000      # 30 seconds
+      idle-timeout: 600000           # 10 minutes
+      max-lifetime: 1800000          # 30 minutes
+      auto-commit: true
+      pool-name: LifecycleHikariCP
+
+  # =============================================
+  # JPA/Hibernate Configuration
+  # =============================================
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+        jdbc:
+          batch_size: 20
+          fetch_size: 50
+        order_inserts: true
+        order_updates: true
+        generate_statistics: false
+
+  # =============================================
+  # Flyway Configuration
+  # =============================================
+  flyway:
+    enabled: false
+
+  # =============================================
+  # Spring State Machine Configuration
+  # =============================================
+  statemachine:
+    # Habilitar monitoreo
+    monitor:
+      enabled: true
+    # Configuración de persistencia (opcional)
+    persistence:
+      enabled: false
+
+# =============================================
+# Server Configuration
+# =============================================
+server:
+  port: 8083
+  servlet:
+    context-path: /
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: on_param
+    include-exception: false
+
+# =============================================
+# Logging Configuration
+# =============================================
+logging:
+  level:
+    root: INFO
+    com.unisono.card.lifecycle: DEBUG
+    org.springframework.statemachine: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    org.springframework.jdbc.core: DEBUG
+    com.zaxxer.hikari: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/card-lifecycle.log
+    max-size: 10MB
+    max-history: 30
+
+# =============================================
+# Actuator Configuration
+# =============================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,statemachine
+  endpoint:
+    health:
+      show-details: always
+    statemachine:
+      enabled: true
+  health:
+    db:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# =============================================
+# SpringDoc OpenAPI Configuration
+# =============================================
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+  show-actuator: true
+
+# =============================================
+# Custom Application Properties
+# =============================================
+card-lifecycle:
+  # State Machine Configuration
+  state-machine:
+    auto-startup: true
+    monitor-enabled: true
+
+  # Transition Configuration
+  transitions:
+    # Tiempo máximo para ejecutar una transición (ms)
+    timeout: 5000
+    # Reintentos en caso de fallo
+    retry-attempts: 3
+    retry-delay: 1000
+
+  # Auditoría
+  audit:
+    enabled: true
+    retention-days: 365
+    log-failed-transitions: true

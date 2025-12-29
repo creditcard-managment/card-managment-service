@@ -33,7 +33,7 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     show-sql: false
     hibernate:
-      ddl-auto: validate  # Flyway maneja las migraciones
+      ddl-auto: validate
     properties:
       hibernate:
         format_sql: true
@@ -54,14 +54,7 @@ spring:
   # Flyway Configuration
   # =============================================
   flyway:
-    enabled: true
-    baseline-on-migrate: true
-    baseline-version: 0
-    locations: classpath:db/migration
-    schemas: public
-    table: flyway_schema_history_card_data
-    validate-on-migrate: true
-    clean-disabled: true  # NUNCA hacer clean en producción
+    enabled: false
 
 # =============================================
 # Server Configuration

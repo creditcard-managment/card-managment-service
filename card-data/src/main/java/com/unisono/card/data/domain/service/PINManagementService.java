@@ -1,7 +1,7 @@
 package com.unisono.card.data.domain.service;
 
 import com.unisono.card.data.domain.model.Card;
-import com.unisono.card.data.domain.model.PIN;
+import com.unisono.card.shared.domain.valueobject.PIN;
 import com.unisono.card.data.domain.port.input.ResetPINUseCase;
 import com.unisono.card.data.domain.port.input.ValidatePINUseCase;
 import com.unisono.card.data.domain.port.output.CardRepository;
