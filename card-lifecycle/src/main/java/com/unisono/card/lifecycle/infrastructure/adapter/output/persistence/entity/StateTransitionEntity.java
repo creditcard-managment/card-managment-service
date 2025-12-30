@@ -50,6 +50,6 @@ public class StateTransitionEntity {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
-    @Column(name = "metadata", columnDefinition = "JSONB")
+    @Column(name = "metadata", columnDefinition = "TEXT")
     private String metadata; // Para guardar datos adicionales en formato JSON
 }

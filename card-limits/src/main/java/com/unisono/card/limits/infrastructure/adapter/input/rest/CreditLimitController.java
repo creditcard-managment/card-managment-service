@@ -1,13 +1,19 @@
 package com.unisono.card.limits.infrastructure.adapter.input.rest;
 
 import com.unisono.card.limits.application.dto.request.*;
-import com.unisono.card.limits.application.dto.response.*;
+import com.unisono.card.limits.application.dto.response.CreditInfoResponse;
+import com.unisono.card.limits.application.dto.response.CreditLimitHistoryResponse;
+import com.unisono.card.limits.application.dto.response.CreditLimitResponse;
 import com.unisono.card.limits.application.mapper.CreditLimitDtoMapper;
 import com.unisono.card.limits.domain.model.CreditLimit;
 import com.unisono.card.limits.domain.model.CreditLimitHistory;
-import com.unisono.card.limits.domain.port.input.*;
+import com.unisono.card.limits.domain.port.input.AssignCreditLimitUseCase;
+import com.unisono.card.limits.domain.port.input.GetCreditInfoUseCase;
+import com.unisono.card.limits.domain.port.input.RecalculateAvailableCreditUseCase;
+import com.unisono.card.limits.domain.port.input.UpdateCreditLimitUseCase;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
+import com.unisono.card.shared.domain.valueobject.Money;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -42,6 +48,45 @@ public class CreditLimitController {
     // ========================================
     // ASSIGN CREDIT LIMIT
     // ========================================
+
+    @PostMapping("/cards/{cardId}")
+    @Operation(summary = "Asignar límite de crédito",
+            description = "Asigna límites de crédito a una tarjeta")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Límite asignado exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Datos inválidos"),
+            @ApiResponse(responseCode = "409", description = "La tarjeta ya tiene límites asignados")
+    })
+    public ResponseEntity<CreditLimitResponse> assignCreditLimit(
+            @Parameter(description = "ID de la tarjeta")
+            @PathVariable String cardId,
+            @Valid @RequestBody AssignCreditLimitRequest request
+    ) {
+        log.info("Assigning credit limit to card: {}", cardId);
+
+        // Construir el command
+        AssignCreditLimitUseCase.AssignCreditLimitCommand command =
+                new AssignCreditLimitUseCase.AssignCreditLimitCommand(
+                        CardId.of(cardId),
+                        Money.of(request.getPurchaseLimitAmount(), request.getCurrency()),
+                        request.getCashAdvancePercentage(),
+                        request.getDailyLimitAmount() != null
+                                ? Money.of(request.getDailyLimitAmount(), request.getCurrency())
+                                : null,
+                        request.getMonthlyLimitAmount() != null
+                                ? Money.of(request.getMonthlyLimitAmount(), request.getCurrency())
+                                : null,
+                        request.getAssignedBy()
+                );
+
+        // Ejecutar use case
+        CreditLimit creditLimit = assignCreditLimitUseCase.execute(command);
+
+        // Convertir a response
+        CreditLimitResponse response = mapper.toResponse(creditLimit);
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
 
     @PostMapping
     @Operation(summary = "Asignar límite de crédito",

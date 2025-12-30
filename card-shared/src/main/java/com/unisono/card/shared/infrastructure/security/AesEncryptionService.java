@@ -31,7 +31,7 @@ public class AesEncryptionService implements EncryptionService {
     private final SecureRandom secureRandom;
 
     public AesEncryptionService(
-            @Value("${encryption.secret-key:MySecretKey32BytesForAES256!!}") String secretKeyString
+            @Value("${encryption.secret-key:MySecretKey32BytesForAES256!!123}") String secretKeyString
     ) {
         // Validar que la clave tenga 32 bytes (256 bits)
         byte[] keyBytes = secretKeyString.getBytes(StandardCharsets.UTF_8);

@@ -22,8 +22,8 @@ spring:
 
   datasource:
     url: jdbc:postgresql://localhost:5432/card_management_db
-    username: postgres
-    password: postgres
+    username: card_user
+    password: card_pass
 
   jpa:
     show-sql: true
@@ -79,6 +79,18 @@ spring:
     properties:
       hibernate:
         generate_statistics: false
+
+encryption:
+  secret-key: "MySecretKey32BytesForAES256!!123"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
 
 logging:
   level:

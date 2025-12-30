@@ -13,14 +13,25 @@ import javax.sql.DataSource;
 
 /**
  * Configuración de base de datos para card-limits
+ *
+ * @EnableJpaRepositories(basePackages = {
+ *         "com.unisono.card.limits.infrastructure.adapter.output.persistence.repository",
+ *         "com.unisono.card.limits.infrastructure.adapter.output.card"
+ * })
  */
 @Configuration
 @EnableTransactionManagement
 @EnableJpaRepositories(
-        basePackages = "com.unisono.card.limits.infrastructure.adapter.output.persistence.repository"
+        basePackages = {
+                "com.unisono.card.limits.infrastructure.adapter.output.persistence.repository",
+                "com.unisono.card.limits.infrastructure.adapter.output.card"  // ✅ AGREGAR ESTE
+        }
 )
 @EntityScan(
-        basePackages = "com.unisono.card.limits.infrastructure.adapter.output.persistence.entity"
+        basePackages = {
+                "com.unisono.card.limits.infrastructure.adapter.output.persistence.entity",
+                "com.unisono.card.limits.infrastructure.adapter.output.card"  // ✅ AGREGAR ESTE (para CardJpaEntity)
+        }
 )
 public class CreditLimitDatabaseConfig {
 

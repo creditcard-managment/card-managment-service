@@ -3,6 +3,8 @@ package com.unisono.card.lifecycle.infrastructure.adapter.output.creditlimit;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.math.BigDecimal;
+
 /**
  * Entity simplificado para credit_limits
  * Solo campos necesarios para card-lifecycle
@@ -22,7 +24,7 @@ public class CreditLimitJpaEntity {
     private String cardId;
 
     @Column(name = "purchase_limit_amount", nullable = false)
-    private Double purchaseLimitAmount;
+    private BigDecimal purchaseLimitAmount;
 
     // ✅ SOLO los campos que lifecycle necesita para validar
     // NO necesita todos los campos de card-limits
