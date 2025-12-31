@@ -28,6 +28,20 @@ spring:
   flyway:
     enabled: false
 
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+      properties:
+        max.in.flight.requests.per.connection: 5
+        enable.idempotence: true
+        spring.json.add.type.headers: false
+    properties:
+      spring.json.trusted.packages: "com.unisono.card.events.domain"
+
 server:
   port: 8081
 
@@ -48,3 +62,5 @@ logging:
   level:
     com.unisono.card: DEBUG
     org.hibernate.SQL: DEBUG
+    org.springframework.kafka: DEBUG  # ✅ Activar logs de Kafka
+    org.apache.kafka: INFO            # ✅ Logs de cliente Kafka

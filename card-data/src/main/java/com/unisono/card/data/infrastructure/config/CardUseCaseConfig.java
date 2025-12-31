@@ -7,6 +7,7 @@ import com.unisono.card.data.domain.service.CardManagementService;
 import com.unisono.card.data.domain.service.CardSecurityService;
 import com.unisono.card.data.domain.service.CardValidationService;
 import com.unisono.card.data.domain.service.PINManagementService;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -24,8 +25,8 @@ public class CardUseCaseConfig {
      * - GetCardUseCase
      */
     @Bean
-    public CardManagementService cardManagementService(CardRepository cardRepository) {
-        return new CardManagementService(cardRepository);
+    public CardManagementService cardManagementService(CardRepository cardRepository, ApplicationEventPublisher event) {
+        return new CardManagementService(cardRepository, event);
     }
 
     /**

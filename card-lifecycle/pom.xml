@@ -27,7 +27,10 @@
             <groupId>com.unisono.card</groupId>
             <artifactId>card-shared</artifactId>
         </dependency>
-
+        <dependency>
+            <groupId>com.unisono.card</groupId>
+            <artifactId>card-events</artifactId>
+        </dependency>
         <!-- ========== SPRING BOOT ========== -->
 
         <dependency>

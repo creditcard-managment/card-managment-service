@@ -1,5 +1,6 @@
 package com.unisono.card.data.domain.service;
 
+import com.unisono.card.data.domain.event.CardCreatedDomainEvent;
 import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.port.input.CreateCardUseCase;
 import com.unisono.card.data.domain.port.input.GetCardUseCase;
@@ -9,6 +10,7 @@ import com.unisono.card.shared.domain.valueobject.CardId;
 import com.unisono.card.shared.domain.valueobject.ClientId;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,7 +28,7 @@ import java.util.Optional;
 public class CardManagementService implements CreateCardUseCase, GetCardUseCase {
 
     private final CardRepository cardRepository;
-
+    private final ApplicationEventPublisher eventPublisher;
     // ========================================
     // CreateCardUseCase
     // ========================================
@@ -47,6 +49,10 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase 
         Card savedCard = cardRepository.save(card);
 
         log.info("Card created successfully with ID: {}", savedCard.getId());
+
+        log.info("🔵 Publishing CardCreatedDomainEvent to Spring...");
+        eventPublisher.publishEvent(new CardCreatedDomainEvent(savedCard));
+        log.info("🔵 ✅ CardCreatedDomainEvent published to Spring");
 
         return savedCard;
     }

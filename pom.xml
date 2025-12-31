@@ -68,6 +68,7 @@
     <!-- MÓDULOS -->
     <modules>
         <module>card-shared</module>
+        <module>card-events</module>
         <module>card-data</module>
         <module>card-limits</module>
         <module>card-lifecycle</module>
@@ -80,6 +81,11 @@
             <dependency>
                 <groupId>com.unisono.card</groupId>
                 <artifactId>card-shared</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.unisono.card</groupId>
+                <artifactId>card-events</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
