@@ -2,6 +2,7 @@ package com.unisono.card.lifecycle.infrastructure.adapter.input.rest.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -17,6 +18,10 @@ import lombok.NoArgsConstructor;
 @Schema(description = "Solicitud para activar una tarjeta")
 public class ActivateCardRequest {
 
+    @NotBlank(message = "El PIN es obligatorio")
+    @Pattern(regexp = "^\\d{4}$", message = "El PIN debe ser exactamente 4 dígitos numéricos")
+    @Schema(description = "PIN de 4 dígitos", example = "1234")
+    private String pin; // ✅ AGREGAR ESTE CAMPO
     @NotBlank(message = "La razón es obligatoria")
     @Schema(description = "Razón de activación", example = "Cliente solicitó activación vía app")
     private String reason;

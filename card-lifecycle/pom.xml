@@ -15,7 +15,6 @@
 
     <artifactId>card-lifecycle</artifactId>
     <packaging>jar</packaging>
-
     <name>card-lifecycle</name>
     <description>Módulo de gestión del ciclo de vida de tarjetas con Spring State Machine</description>
 
@@ -106,6 +105,18 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
+        <!-- ✅ Spring Kafka -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
+        <!-- ✅ Jackson para serialización JSON -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+
         <!-- ========== DOCUMENTATION ========== -->
 
         <dependency>
@@ -162,6 +173,7 @@
             <version>4.0.0</version>
             <scope>test</scope>
         </dependency>
+
     </dependencies>
 
     <build>
@@ -179,3 +191,4 @@
         </plugins>
     </build>
 </project>
+

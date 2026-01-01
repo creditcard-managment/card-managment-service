@@ -7,6 +7,7 @@ import com.unisono.card.data.application.mapper.CardDtoMapper;
 import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.port.input.CreateCardUseCase;
 import com.unisono.card.data.domain.port.input.GetCardUseCase;
+import com.unisono.card.data.domain.service.CardManagementService;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
 import com.unisono.card.shared.domain.valueobject.ClientId;
@@ -22,7 +23,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -35,6 +38,7 @@ import java.util.stream.Collectors;
 @Tag(name = "Cards", description = "Endpoints para gestión de tarjetas")
 public class CardController {
 
+    private final CardManagementService cardManagementService;
     private final CreateCardUseCase createCardUseCase;
     private final GetCardUseCase getCardUseCase;
     private final CardDtoMapper mapper;
@@ -139,5 +143,53 @@ public class CardController {
         CardDetailResponse response = mapper.toDetailResponse(card);
 
         return ResponseEntity.ok(response);
+    }
+
+    @PutMapping("/{cardId}/status")
+    public ResponseEntity<Void> updateStatus(
+            @PathVariable String cardId,
+            @RequestBody Map<String, String> request) {
+
+        log.info("Actualizando estado de tarjeta: {} -> {}", cardId, request.get("status"));
+
+        // ✅ Usar el servicio existente
+        cardManagementService.updateStatus(cardId, request.get("status"));
+
+        return ResponseEntity.ok().build();
+    }
+
+    @PutMapping("/{cardId}/activated-at")
+    public ResponseEntity<Void> updateActivatedAt(
+            @PathVariable String cardId,
+            @RequestBody Map<String, String> request) {
+
+        log.info("Actualizando fecha de activación: {}", cardId);
+
+        LocalDateTime activatedAt = LocalDateTime.parse(request.get("activatedAt"));
+
+        // ✅ Usar el servicio existente
+        cardManagementService.updateActivatedAt(cardId, activatedAt);
+
+        return ResponseEntity.ok().build();
+    }
+
+    @PutMapping("/{cardId}/card-data")
+    public ResponseEntity<Void> updateCardData(
+            @PathVariable String cardId,
+            @RequestBody Map<String, Object> request) {
+
+        log.info("Actualizando datos de tarjeta: {}", cardId);
+
+        // ✅ Usar el servicio existente
+        cardManagementService.updateCardData(
+                cardId,
+                (String) request.get("cardNumber"),
+                (String) request.get("cvv"),
+                (String) request.get("pin"),
+                (Integer) request.get("expirationMonth"),
+                (Integer) request.get("expirationYear")
+        );
+
+        return ResponseEntity.ok().build();
     }
 }

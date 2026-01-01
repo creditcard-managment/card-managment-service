@@ -1,87 +1,47 @@
-# =============================================
-# Main Application Configuration
-# =============================================
-
 spring:
-  profiles:
-    active: dev
-
-  # Import module-specific configs
-  config:
-    import:
-      - optional:classpath:application-card-lifecycle.yml
-
----
-# =============================================
-# Development Profile
-# =============================================
-spring:
-  config:
-    activate:
-      on-profile: dev
-
+  application:
+    name: card-lifecycle
+  
   datasource:
     url: jdbc:postgresql://localhost:5432/card_management_db
     username: card_user
     password: card_pass
-
+    driver-class-name: org.postgresql.Driver
+    
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+  
   jpa:
+    hibernate:
+      ddl-auto: validate
     show-sql: true
     properties:
       hibernate:
-        format_sql: true
-
-logging:
-  level:
-    com.unisono.card.lifecycle: DEBUG
-    org.springframework.statemachine: DEBUG
-
----
-# =============================================
-# Test Profile
-# =============================================
-spring:
-  config:
-    activate:
-      on-profile: test
-
-  datasource:
-    url: jdbc:postgresql://localhost:5432/card_management_test_db
-    username: postgres
-    password: postgres
-
-  jpa:
-    hibernate:
-      ddl-auto: create-drop
-
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  
   flyway:
     enabled: false
 
----
-# =============================================
-# Production Profile
-# =============================================
-spring:
-  config:
-    activate:
-      on-profile: prod
+  # ✅ CONFIGURACIÓN DE KAFKA CONSUMER
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: card-lifecycle-consumer-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.unisono.card.events.domain"
+        spring.json.value.default.type: "com.unisono.card.events.domain.CardCreatedEvent"
+    listener:
+      ack-mode: manual
 
-  datasource:
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
-    hikari:
-      maximum-pool-size: 20
-      minimum-idle: 10
-
-  jpa:
-    show-sql: false
-    properties:
-      hibernate:
-        generate_statistics: false
+server:
+  port: 8083
 
 encryption:
-  secret-key: "MySecretKey32BytesForAES256!!123"
+  secret-key: "SecretKey32CharsForEncryption!!!"
 
 management:
   endpoints:
@@ -94,8 +54,6 @@ management:
 
 logging:
   level:
-    root: WARN
-    com.unisono.card.lifecycle: INFO
-    org.springframework.statemachine: INFO
-  file:
-    name: /var/log/card-management/card-lifecycle.log
+    com.unisono.card: DEBUG
+    org.springframework.kafka: INFO
+    org.apache.kafka: INFO

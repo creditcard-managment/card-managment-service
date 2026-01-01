@@ -2,10 +2,16 @@ package com.unisono.card.lifecycle.infrastructure.adapter.input.rest;
 
 import com.unisono.card.lifecycle.application.service.CardLifecycleService;
 import com.unisono.card.lifecycle.domain.model.StateTransition;
+import com.unisono.card.lifecycle.domain.port.input.ActivateCardUseCase;
+import com.unisono.card.lifecycle.domain.port.input.ApproveCardUseCase;
+import com.unisono.card.lifecycle.domain.port.input.IssueCardUseCase;
 import com.unisono.card.lifecycle.infrastructure.adapter.input.rest.dto.*;
 import com.unisono.card.lifecycle.infrastructure.adapter.input.rest.mapper.LifecycleDtoMapper;
 import com.unisono.card.shared.domain.valueobject.*;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Slf4j
@@ -24,26 +31,46 @@ public class CardLifecycleController {
 
     private final CardLifecycleService lifecycleService;
     private final LifecycleDtoMapper mapper;
+    private final IssueCardUseCase issueCardUseCase;
+    private final ApproveCardUseCase approveCardUseCase;
+    private final ActivateCardUseCase activateCardUseCase;
 
     // =============================================
     // ENDPOINTS DE TRANSICIÓN DE ESTADO
     // =============================================
 
     @PostMapping("/{cardId}/approve")
-    @Operation(summary = "Aprobar tarjeta", description = "Aprueba una tarjeta solicitada (REQUESTED → APPROVED)")
-    public ResponseEntity<Void> approveCard(
-            @PathVariable String cardId,
-            @Valid @RequestBody ApproveCardRequest request
-    ) {
+    @Operation(summary = "Aprobar tarjeta", description = "Aprueba una solicitud de tarjeta")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Tarjeta aprobada exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Datos inválidos"),
+            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada")
+    })
+    public ResponseEntity<CardLifecycleResponse> approveCard(
+            @Parameter(description = "ID de la tarjeta") @PathVariable String cardId,
+            @Valid @RequestBody ApproveCardRequest request) {
+
         log.info("REST: Aprobando tarjeta: {}", cardId);
 
-        lifecycleService.approveCard(
-                CardId.of(cardId),
-                request.getReason(),
-                request.getApprovedBy()
-        );
+        // ✅ Crear Command y ejecutar
+        ApproveCardUseCase.ApproveCardCommand command =
+                new ApproveCardUseCase.ApproveCardCommand(
+                        CardId.of(cardId),
+                        request.getReason(),
+                        request.getApprovedBy()
+                );
 
-        return ResponseEntity.ok().build();
+        approveCardUseCase.execute(command);
+
+        // Construir respuesta
+        CardLifecycleResponse response = CardLifecycleResponse.builder()
+                .cardId(cardId)
+                .message("Tarjeta aprobada exitosamente")
+                .status("APPROVED")
+                .timestamp(LocalDateTime.now())
+                .build();
+
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/{cardId}/reject")
@@ -64,42 +91,69 @@ public class CardLifecycleController {
     }
 
     @PostMapping("/{cardId}/issue")
-    @Operation(summary = "Emitir tarjeta", description = "Emite una tarjeta aprobada asignando número, CVV, PIN y fecha de expiración (APPROVED → ISSUED)")
-    public ResponseEntity<Void> issueCard(
+    public ResponseEntity<CardLifecycleResponse> issueCard(
             @PathVariable String cardId,
-            @Valid @RequestBody IssueCardRequest request
-    ) {
+            @Valid @RequestBody IssueCardRequest request) {
+
         log.info("REST: Emitiendo tarjeta: {}", cardId);
 
-        // ✅ Convertir DTO → Value Objects directamente
-        lifecycleService.issueCard(
+        CardNumber cardNumber = CardNumber.of(request.getCardNumber());
+        CVV cvv = CVV.of(request.getCvv());
+        PIN pin = PIN.of(request.getPin());
+        ExpirationDate expirationDate = ExpirationDate.of(
+                request.getExpirationMonth(),
+                request.getExpirationYear()
+        );
+
+        // ✅ Crear Command
+        IssueCardUseCase.IssueCardCommand command;
+        command = new IssueCardUseCase.IssueCardCommand(
                 CardId.of(cardId),
-                CardNumber.of(request.getCardNumber()),
-                CVV.of(request.getCvv()),
-                hashPin(request.getPin()), // TODO: Implementar encriptación real
-                ExpirationDate.of(request.getExpirationMonth(), request.getExpirationYear()),
+                cardNumber,
+                cvv,
+                pin,
+                expirationDate,
                 request.getReason(),
                 request.getIssuedBy()
         );
 
-        return ResponseEntity.ok().build();
+        issueCardUseCase.execute(command);
+
+        CardLifecycleResponse response = CardLifecycleResponse.builder()
+                .cardId(cardId)
+                .message("Tarjeta emitida exitosamente")
+                .status("ISSUED")
+                .timestamp(LocalDateTime.now())
+                .build();
+
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/{cardId}/activate")
-    @Operation(summary = "Activar tarjeta", description = "Activa una tarjeta emitida (ISSUED → ACTIVE)")
-    public ResponseEntity<Void> activateCard(
+    public ResponseEntity<CardLifecycleResponse> activateCard(
             @PathVariable String cardId,
-            @Valid @RequestBody ActivateCardRequest request
-    ) {
+            @Valid @RequestBody ActivateCardRequest request) {
+
         log.info("REST: Activando tarjeta: {}", cardId);
 
-        lifecycleService.activateCard(
-                CardId.of(cardId),
-                request.getReason(),
-                request.getActivatedBy()
-        );
+        // ✅ Crear Command (sin PIN en el Command)
+        ActivateCardUseCase.ActivateCardCommand command =
+                new ActivateCardUseCase.ActivateCardCommand(
+                        CardId.of(cardId),
+                        request.getReason(),
+                        request.getActivatedBy()
+                );
 
-        return ResponseEntity.ok().build();
+        activateCardUseCase.execute(command);
+
+        CardLifecycleResponse response = CardLifecycleResponse.builder()
+                .cardId(cardId)
+                .message("Tarjeta activada exitosamente")
+                .status("ACTIVE")
+                .timestamp(LocalDateTime.now())
+                .build();
+
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/{cardId}/block")
