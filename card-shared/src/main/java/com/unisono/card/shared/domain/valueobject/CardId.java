@@ -33,6 +33,7 @@ public class CardId implements Serializable {
         return new CardId(value);
     }
 
+
     /**
      * Genera un nuevo CardId aleatorio usando UUID.
      */

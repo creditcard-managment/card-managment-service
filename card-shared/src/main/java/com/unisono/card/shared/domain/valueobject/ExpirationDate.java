@@ -1,5 +1,6 @@
 package com.unisono.card.shared.domain.valueobject;
 
+import com.unisono.card.shared.domain.exception.InvalidValueObjectException;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 
@@ -25,6 +26,30 @@ public class ExpirationDate {
 
     public static ExpirationDate of(int month, int year) {
         return new ExpirationDate(month, year);
+    }
+
+    public static ExpirationDate of(String value) {
+        if (value == null || value.isBlank()) {
+            throw new InvalidValueObjectException("Expiration date cannot be null or blank");
+        }
+
+        try {
+            // Parse MM/YYYY format
+            if (!value.matches("(0[1-9]|1[0-2])/20\\d{2}")) {
+                throw new InvalidValueObjectException(
+                        "Invalid expiration date format. Expected MM/YYYY, got: " + value
+                );
+            }
+
+            String[] parts = value.split("/");
+            int month = Integer.parseInt(parts[0]);
+            int year = Integer.parseInt(parts[1]);
+
+            return new ExpirationDate(month, year);
+
+        } catch (NumberFormatException e) {
+            throw new InvalidValueObjectException("Invalid expiration date: " + value, e);
+        }
     }
 
     /**
