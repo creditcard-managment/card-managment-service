@@ -34,7 +34,7 @@ public interface TransactionMapper {
 
     // Amount mapping
     @Mapping(target = "amount", expression = "java(transaction.getAmount().getAmount().getAmount())")
-    @Mapping(target = "currency", expression = "java(transaction.getAmount().getAmount().getCurrency())")
+    @Mapping(target = "currency", expression = "java(transaction.getAmount().getAmount().getCurrency().toString())")
     @Mapping(target = "localAmount", expression = "java(getLocalAmount(transaction))")
     @Mapping(target = "localCurrency", expression = "java(getLocalCurrency(transaction))")
     @Mapping(target = "exchangeRate", expression = "java(getExchangeRate(transaction))")
@@ -42,7 +42,7 @@ public interface TransactionMapper {
     // Card info (masked)
     @Mapping(target = "cardLastFour", expression = "java(transaction.getCardData().getLastFourDigits())")
     @Mapping(target = "cardholderName", expression = "java(transaction.getCardData().getCardholderName())")
-    @Mapping(target = "cardExpirationDate", expression = "java(transaction.getCardData().getExpirationDate().getValue())")
+    @Mapping(target = "cardExpirationDate", expression = "java(transaction.getCardData().getExpirationDate().getYearMonth().toString())")
 
     // Authorization
     @Mapping(target = "authorizationCode", expression = "java(getAuthorizationCode(transaction))")
@@ -187,10 +187,8 @@ public interface TransactionMapper {
     }
 
     default LocalDateTime getAuthorizedAt(Transaction transaction) {
-        if (transaction.getAuthorizationCode() != null) {
-            LocalDateTime instant = transaction.getAuthorizationCode().getAuthorizedAt();
-            return LocalDateTime.ofInstant(instant, ZoneId.systemDefault());
-        }
-        return null;
+        return transaction.getAuthorizationCode() != null
+                ? transaction.getAuthorizationCode().getAuthorizedAt()  // ✅ Ya es LocalDateTime
+                : null;
     }
 }

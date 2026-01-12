@@ -47,7 +47,7 @@ public interface PaymentMapper {
     @Mapping(target = "transactionType", source = "type")
     @Mapping(target = "status", source = "status")
     @Mapping(target = "amount", expression = "java(transaction.getAmount().getAmount().getAmount())")
-    @Mapping(target = "currency", expression = "java(transaction.getAmount().getAmount().getCurrency())")
+    @Mapping(target = "currency", expression = "java(transaction.getAmount().getAmount().getCurrency().toString())")
     @Mapping(target = "authorizationCode", expression = "java(getAuthorizationCodeValue(transaction))")
     @Mapping(target = "responseCode", expression = "java(getResponseCode(transaction))")
     @Mapping(target = "responseMessage", expression = "java(getResponseMessage(transaction))")

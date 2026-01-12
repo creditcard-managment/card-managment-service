@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -50,8 +51,9 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     public List<Transaction> findByCardId(CardId cardId) {
         log.debug("Finding transactions for card: {}", cardId);
 
-        return jpaRepository.findByCardIdOrderByTransactionDateDesc(cardId.getValue())
+        UUID cardUuid = toUuid(cardId.getValue()); // ✅ String → UUID
 
+        return jpaRepository.findByCardIdOrderByTransactionDateDesc(cardUuid)
                 .stream()
                 .map(entityMapper::toDomain)
                 .collect(Collectors.toList());
@@ -61,8 +63,10 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     public List<Transaction> findByCardIdAndStatus(CardId cardId, TransactionStatus status) {
         log.debug("Finding transactions for card: {} with status: {}", cardId, status);
 
+        UUID cardUuid = toUuid(cardId.getValue()); // ✅ String → UUID
+
         return jpaRepository.findByCardIdAndTransactionStatusOrderByTransactionDateDesc(
-                        cardId.getValue(),
+                        cardUuid,
                         status
                 )
                 .stream()
@@ -74,7 +78,9 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     public List<Transaction> findByCardIdAndDateRange(CardId cardId, LocalDateTime from, LocalDateTime to) {
         log.debug("Finding transactions for card: {} between {} and {}", cardId, from, to);
 
-        return jpaRepository.findByCardIdAndDateRange(cardId.getValue(), from, to)
+        UUID cardUuid = toUuid(cardId.getValue()); // ✅ String → UUID
+
+        return jpaRepository.findByCardIdAndDateRange(cardUuid, from, to)
                 .stream()
                 .map(entityMapper::toDomain)
                 .collect(Collectors.toList());
@@ -122,5 +128,19 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
         log.debug("Deleting transaction: {}", transactionId);
 
         jpaRepository.deleteById(transactionId.getValue());
+    }
+
+    // ==================== Helper Methods ====================
+
+    /**
+     * Convert String to UUID
+     */
+    private UUID toUuid(String value) {
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            log.error("Invalid UUID format: {}", value, e);
+            throw new IllegalArgumentException("Invalid CardId UUID format: " + value, e);
+        }
     }
 }
