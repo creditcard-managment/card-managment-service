@@ -1,0 +1,171 @@
+# Payment Processing Module Configuration
+
+spring:
+  application:
+    name: card-management-service
+
+  # DataSource Configuration
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/card_management}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      pool-name: PaymentProcessingPool
+
+  # JPA/Hibernate Configuration
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc:
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
+
+  # Flyway Configuration
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+  # Kafka Configuration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+    producer:
+      acks: all
+      retries: 3
+      compression-type: snappy
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+
+    topics:
+      partitions: 3
+      replication-factor: 2
+
+      payment:
+        initiated: payment.processing.initiated
+        authorized: payment.processing.authorized
+        processed: payment.processing.completed
+        declined: payment.processing.declined
+        reversed: payment.reversal.completed
+        default: payment.events
+
+      refund:
+        initiated: payment.refund.initiated
+        processed: payment.refund.processed
+
+      transaction:
+        settled: payment.settlement.completed
+        completed: payment.transaction.completed
+
+      fraud:
+        detected: payment.fraud.detected
+
+# Server Configuration
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /
+  compression:
+    enabled: true
+  error:
+    include-message: always
+    include-binding-errors: always
+
+# External Services Configuration
+services:
+  card-data:
+    url: ${CARD_DATA_SERVICE_URL:http://localhost:8080}
+
+  card-limits:
+    url: ${CARD_LIMITS_SERVICE_URL:http://localhost:8080}
+
+  merchant:
+    url: ${MERCHANT_SERVICE_URL:http://localhost:8080}
+
+  fraud-detection:
+    url: ${FRAUD_DETECTION_SERVICE_URL:http://localhost:8081}
+
+  authorization:
+    url: ${AUTHORIZATION_SERVICE_URL:http://localhost:8082}
+
+# Fraud Detection Configuration
+fraud:
+  risk-threshold:
+    high: 70
+    medium: 40
+    low: 20
+
+  velocity:
+    max-transactions-per-hour: 10
+    max-transactions-per-day: 50
+
+  amount:
+    suspicious-threshold: 5000.00
+
+# Authorization Configuration
+authorization:
+  timeout-ms: 3000
+  simulate: ${SIMULATE_AUTHORIZATION:true}
+  retry:
+    max-attempts: 3
+    backoff-ms: 1000
+
+# Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.unisono.card.payment: DEBUG
+    org.springframework.web: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    org.apache.kafka: INFO
+
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+  file:
+    name: logs/payment-processing.log
+    max-size: 10MB
+    max-history: 30
+
+# SpringDoc OpenAPI Configuration
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operationsSorter: method
+    tagsSorter: alpha

@@ -1,0 +1,36 @@
+# Production Profile Configuration
+
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 10
+
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+
+# Disable simulation in production
+authorization:
+  simulate: false
+
+fraud:
+  risk-threshold:
+    high: 70
+    medium: 40
+
+# Production logging
+logging:
+  level:
+    root: WARN
+    com.unisono.card.payment: INFO
+    org.springframework.web: WARN
+    org.hibernate: WARN

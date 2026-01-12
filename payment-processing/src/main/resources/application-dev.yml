@@ -1,0 +1,30 @@
+# Development Profile Configuration
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/card_management_dev
+    username: postgres
+    password: postgres
+
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: update
+
+  kafka:
+    bootstrap-servers: localhost:9092
+
+# Enable simulation mode for development
+authorization:
+  simulate: true
+
+fraud:
+  risk-threshold:
+    high: 90  # Higher threshold for dev
+
+# More verbose logging in dev
+logging:
+  level:
+    com.unisono.card.payment: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate: DEBUG

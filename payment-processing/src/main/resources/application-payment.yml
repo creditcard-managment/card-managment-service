@@ -1,0 +1,43 @@
+# Kafka Configuration for Payment Processing
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+    producer:
+      acks: all
+      retries: 3
+      compression-type: snappy
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+
+    topics:
+      partitions: 3
+      replication-factor: 2
+
+      payment:
+        initiated: payment.processing.initiated
+        authorized: payment.processing.authorized
+        processed: payment.processing.completed
+        declined: payment.processing.declined
+        reversed: payment.reversal.completed
+        default: payment.events
+
+      refund:
+        initiated: payment.refund.initiated
+        processed: payment.refund.processed
+
+      transaction:
+        settled: payment.settlement.completed
+        completed: payment.transaction.completed
+
+      fraud:
+        detected: payment.fraud.detected
+
+# Logging
+logging:
+  level:
+    com.unisono.card.payment.infrastructure.adapter.output.event: DEBUG
+    org.apache.kafka: INFO
