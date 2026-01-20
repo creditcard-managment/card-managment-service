@@ -112,4 +112,50 @@ public class CardEntityMapper {
 
         return entity;
     }
+
+    /**
+     * ✅ SOBRECARGA: Convierte de CardEntity a Card (CON valores desencriptados)
+     * Usa los valores desencriptados en lugar de los campos de la entidad
+     */
+    public Card toDomain(CardEntity entity, String decryptedCardNumber, String decryptedCvv) {
+        Card card = new Card();
+
+        card.setId(new CardId(entity.getCardId()));
+        card.setStatus(entity.getStatus());
+        card.setClientId(new ClientId(entity.getClientId()));
+
+        // ✅ Usar valores desencriptados en lugar de los campos de la entidad
+        if (decryptedCardNumber != null) {
+            card.setCardNumber(new CardNumber(decryptedCardNumber));
+        }
+
+        if (decryptedCvv != null) {
+            card.setCvv(new CVV(decryptedCvv));
+        }
+
+        card.setPinHash(entity.getPinHash());
+
+        if (entity.getExpirationMonth() != null && entity.getExpirationYear() != null) {
+            card.setExpirationDate(new ExpirationDate(
+                    entity.getExpirationMonth(),
+                    entity.getExpirationYear()
+            ));
+        }
+
+        // CardHolder
+        if (entity.getHolderFirstName() != null && entity.getHolderLastName() != null) {
+            CardHolder holder = new CardHolder(
+                    entity.getHolderFirstName(),
+                    entity.getHolderLastName(),
+                    entity.getHolderDocumentNumber(),
+                    entity.getHolderEmail(),
+                    entity.getHolderPhoneNumber(),
+                    entity.getHolderBirthDate(),
+                    entity.getHolderAddress()
+            );
+            card.setHolder(holder);
+        }
+
+        return card;
+    }
 }

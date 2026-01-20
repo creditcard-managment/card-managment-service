@@ -1,6 +1,7 @@
 package com.unisono.card.lifecycle.infrastructure.statemachine.action;
 
-import com.unisono.card.lifecycle.domain.model.Card;
+import com.unisono.card.data.domain.model.*;
+import com.unisono.card.lifecycle.domain.model.CardLifecycle;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleEvent;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleState;
 import com.unisono.card.lifecycle.domain.port.output.CardPort;
@@ -15,9 +16,6 @@ import org.springframework.statemachine.StateContext;
 import org.springframework.statemachine.action.Action;
 import org.springframework.stereotype.Component;
 
-/**
- * Action ejecutada después de emitir una tarjeta
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -42,11 +40,14 @@ public class IssuanceAction implements Action<CardLifecycleState, CardLifecycleE
             Card card = cardPort.findById(cardId)
                     .orElseThrow(() -> new NotFoundException("Card not found: " + cardId.getValue()));
 
-            card.issue(cardNumber, cvv, pinHash, expirationDate);
+            // ✅ Usar CardLifecycle en lugar de card.issue()
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.issue(cardNumber, cvv, pinHash, expirationDate);
+
             cardPort.save(card);
 
             log.info("Card issued successfully: {} - Last 4 digits: {}",
-                    cardId.getValue(), card.getLastFourDigits());
+                    cardId.getValue(), card.getCardNumber().getLastFourDigits());
 
         } catch (Exception e) {
             log.error("Error issuing card: {}", cardId.getValue(), e);

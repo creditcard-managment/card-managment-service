@@ -1,6 +1,6 @@
 package com.unisono.card.lifecycle.infrastructure.adapter.output.card;
 
-import com.unisono.card.lifecycle.domain.model.Card;
+import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.lifecycle.domain.port.output.CardPort;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.*;
@@ -76,10 +76,12 @@ public class CardAdapter implements CardPort {
     private Card toDomainModel(CardJpaEntity entity) {
         log.trace("Convirtiendo entity a domain model: {}", entity.getId());
 
+        ClientId clientId = ClientId.of(entity.getClientId());
+
         Card.CardBuilder builder = Card.builder()
                 .id(CardId.of(entity.getId()))
                 .status(CardStatus.valueOf(entity.getStatus()))
-                .clientId(entity.getClientId());
+                .clientId(clientId);
 
         // Agregar datos de emisión si existen
         if (entity.getCardNumberEncrypted() != null) {

@@ -1,6 +1,7 @@
 package com.unisono.card.lifecycle.infrastructure.statemachine.action;
 
-import com.unisono.card.lifecycle.domain.model.Card;
+import com.unisono.card.data.domain.model.Card;
+import com.unisono.card.lifecycle.domain.model.CardLifecycle;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleEvent;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleState;
 import com.unisono.card.lifecycle.domain.port.output.CardPort;
@@ -35,7 +36,10 @@ public class BlockAction implements Action<CardLifecycleState, CardLifecycleEven
             Card card = cardPort.findById(cardId)
                     .orElseThrow(() -> new NotFoundException("Card not found: " + cardId.getValue()));
 
-            card.block();
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.block();
+
             cardPort.save(card);
 
             log.info("Card blocked successfully: {}", cardId.getValue());

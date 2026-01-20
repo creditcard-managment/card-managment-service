@@ -1,6 +1,7 @@
 package com.unisono.card.lifecycle.infrastructure.statemachine.action;
 
-import com.unisono.card.lifecycle.domain.model.Card;
+import com.unisono.card.data.domain.model.Card;
+import com.unisono.card.lifecycle.domain.model.CardLifecycle;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleEvent;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleState;
 import com.unisono.card.lifecycle.domain.port.output.CardPort;
@@ -14,9 +15,6 @@ import org.springframework.statemachine.StateContext;
 import org.springframework.statemachine.action.Action;
 import org.springframework.stereotype.Component;
 
-/**
- * Action ejecutada cuando se activa una tarjeta
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -48,8 +46,9 @@ public class ActivationAction implements Action<CardLifecycleState, CardLifecycl
                             "Card not found: " + cardId.getValue()
                     ));
 
-            // ✅ 2. Ejecutar lógica de negocio
-            card.activate();
+            // ✅ 2. Usar CardLifecycle para ejecutar la transición
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.activate();
 
             // ✅ 3. Persistir cambios
             cardPort.save(card);

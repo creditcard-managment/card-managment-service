@@ -1,13 +1,15 @@
 package com.unisono.card.lifecycle.application.service;
 
-import com.unisono.card.lifecycle.domain.model.Card;
+import com.unisono.card.data.domain.model.*;
+import com.unisono.card.lifecycle.domain.model.CardLifecycle;
 import com.unisono.card.lifecycle.domain.model.StateTransition;
 import com.unisono.card.lifecycle.domain.port.output.CardPort;
-import com.unisono.card.lifecycle.domain.port.output.CreditLimitPort;
 import com.unisono.card.lifecycle.domain.port.output.StateTransitionRepository;
-import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.exception.NotFoundException;
-import com.unisono.card.shared.domain.valueobject.*;
+import com.unisono.card.shared.domain.valueobject.CVV;
+import com.unisono.card.shared.domain.valueobject.CardId;
+import com.unisono.card.shared.domain.valueobject.CardNumber;
+import com.unisono.card.shared.domain.valueobject.ExpirationDate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -16,17 +18,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Servicio de aplicación que orquesta el ciclo de vida de las tarjetas
- */
-@Slf4j
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CardLifecycleService {
 
     private final StateTransitionRepository transitionRepository;
     private final CardPort cardPort;
-    private final CreditLimitPort creditLimitPort;
 
     // =============================================
     // COMANDOS DE TRANSICIÓN DE ESTADO
@@ -43,7 +41,10 @@ public class CardLifecycleService {
         String previousState = card.getStatus().name();
 
         try {
-            card.approve();
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.approve();
+
             cardPort.save(card);
 
             StateTransition transition = StateTransition.createSuccessful(
@@ -76,7 +77,10 @@ public class CardLifecycleService {
         String previousState = card.getStatus().name();
 
         try {
-            card.reject();
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.reject();
+
             cardPort.save(card);
 
             StateTransition transition = StateTransition.createSuccessful(
@@ -117,7 +121,10 @@ public class CardLifecycleService {
         String previousState = card.getStatus().name();
 
         try {
-            card.issue(cardNumber, cvv, pinHash, expirationDate);
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.issue(cardNumber, cvv, pinHash, expirationDate);
+
             cardPort.save(card);
 
             StateTransition transition = StateTransition.createSuccessful(
@@ -126,7 +133,7 @@ public class CardLifecycleService {
             transitionRepository.save(transition);
 
             log.info("Tarjeta emitida: {} - Últimos 4 dígitos: {}",
-                    cardId.getValue(), card.getLastFourDigits());
+                    cardId.getValue(), card.getCardNumber().getLastFourDigits());
 
         } catch (Exception e) {
             log.error("Error emitiendo tarjeta: {}", cardId.getValue(), e);
@@ -147,17 +154,14 @@ public class CardLifecycleService {
     public void activateCard(CardId cardId, String reason, String activatedBy) {
         log.info("Activando tarjeta: {} - Razón: {} - Por: {}", cardId.getValue(), reason, activatedBy);
 
-        if (!creditLimitPort.canActivate(cardId)) {
-            throw new BusinessRuleException(
-                    "No se puede activar la tarjeta: debe tener límite de crédito asignado. CardId: " + cardId.getValue()
-            );
-        }
-
         Card card = findCardOrThrow(cardId);
         String previousState = card.getStatus().name();
 
         try {
-            card.activate();
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.activate();
+
             cardPort.save(card);
 
             StateTransition transition = StateTransition.createSuccessful(
@@ -165,7 +169,7 @@ public class CardLifecycleService {
             );
             transitionRepository.save(transition);
 
-            log.info("Tarjeta activada exitosamente: {}", cardId.getValue());
+            log.info("Tarjeta activada: {}", cardId.getValue());
 
         } catch (Exception e) {
             log.error("Error activando tarjeta: {}", cardId.getValue(), e);
@@ -190,7 +194,10 @@ public class CardLifecycleService {
         String previousState = card.getStatus().name();
 
         try {
-            card.block();
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.block();
+
             cardPort.save(card);
 
             StateTransition transition = StateTransition.createSuccessful(
@@ -223,7 +230,10 @@ public class CardLifecycleService {
         String previousState = card.getStatus().name();
 
         try {
-            card.blockForFraud();
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.blockForFraud();
+
             cardPort.save(card);
 
             StateTransition transition = StateTransition.createSuccessful(
@@ -256,7 +266,10 @@ public class CardLifecycleService {
         String previousState = card.getStatus().name();
 
         try {
-            card.cancel();
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.cancel();
+
             cardPort.save(card);
 
             StateTransition transition = StateTransition.createSuccessful(
@@ -282,36 +295,24 @@ public class CardLifecycleService {
     // CONSULTAS
     // =============================================
 
-    /**
-     * Obtiene el historial completo de transiciones de una tarjeta
-     */
     @Transactional(readOnly = true)
     public List<StateTransition> getHistory(CardId cardId) {
         log.info("Obteniendo historial de tarjeta: {}", cardId.getValue());
         return transitionRepository.findByCardId(cardId);
     }
 
-    /**
-     * Obtiene solo las transiciones exitosas
-     */
     @Transactional(readOnly = true)
     public List<StateTransition> getSuccessfulHistory(CardId cardId) {
         log.info("Obteniendo historial exitoso de tarjeta: {}", cardId.getValue());
         return transitionRepository.findSuccessfulByCardId(cardId);
     }
 
-    /**
-     * Obtiene solo las transiciones fallidas
-     */
     @Transactional(readOnly = true)
     public List<StateTransition> getFailedHistory(CardId cardId) {
         log.info("Obteniendo historial fallido de tarjeta: {}", cardId.getValue());
         return transitionRepository.findFailedByCardId(cardId);
     }
 
-    /**
-     * Obtiene la última transición
-     */
     @Transactional(readOnly = true)
     public Optional<StateTransition> getLastTransition(CardId cardId) {
         log.info("Obteniendo última transición de tarjeta: {}", cardId.getValue());
@@ -322,9 +323,6 @@ public class CardLifecycleService {
     // HELPERS PRIVADOS
     // =============================================
 
-    /**
-     * Busca una tarjeta o lanza excepción si no existe
-     */
     private Card findCardOrThrow(CardId cardId) {
         return cardPort.findById(cardId)
                 .orElseThrow(() -> new NotFoundException(

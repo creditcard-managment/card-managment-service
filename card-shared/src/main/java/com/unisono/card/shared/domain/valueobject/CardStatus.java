@@ -24,6 +24,7 @@ public enum CardStatus {
     BLOCKED_FRAUD("Bloqueada por Fraude"),
 
     // Estados finales
+    SUSPENDED("Suspendida"),
     CANCELLED("Cancelada"),
     EXPIRED("Vencida");
 

@@ -230,12 +230,12 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase 
     }
 
     @Transactional
-    public Card replaceCard(CardId oldCardId, String reason) {
-        log.info("Replacing card: {} due to: {}", oldCardId, reason);
+    public Card replaceCard(String cardId, String reason) {
+        log.info("Replacing card: {} due to: {}", cardId, reason);
 
-        // 1. Buscar tarjeta anterior
-        Card oldCard = cardRepository.findById(oldCardId)
-                .orElseThrow();
+        // 1. Convertir String a CardId y buscar tarjeta anterior
+        Card oldCard = cardRepository.findById(new CardId(cardId))
+                .orElseThrow(() -> new CardNotFoundException(cardId));
 
         // 2. Validar que no esté ya cancelada
         if (oldCard.getStatus() == CardStatus.CANCELLED) {
@@ -267,7 +267,7 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase 
         // 6. Guardar nueva tarjeta y publicar evento
         Card savedCard = saveAndPublishCardCreated(newCard);
 
-        log.info("Card {} replaced successfully with new card: {}", oldCardId, savedCard.getId());
+        log.info("Card {} replaced successfully with new card: {}", cardId, savedCard.getId());
 
         return savedCard;
     }

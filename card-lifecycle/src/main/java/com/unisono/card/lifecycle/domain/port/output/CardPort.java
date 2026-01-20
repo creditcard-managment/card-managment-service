@@ -1,6 +1,6 @@
 package com.unisono.card.lifecycle.domain.port.output;
 
-import com.unisono.card.lifecycle.domain.model.Card;
+import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.shared.domain.valueobject.CardId;
 
 import java.util.Optional;

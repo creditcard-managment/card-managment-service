@@ -42,6 +42,13 @@ public class CardEntity {
     @Column(name = "client_id", nullable = false)
     private String clientId;
 
+    // ✅ CAMBIO: Datos de emisión ENCRIPTADOS
+    @Column(name = "card_number_encrypted")
+    private String cardNumberEncrypted;
+
+    @Column(name = "cvv_encrypted")
+    private String cvvEncrypted;
+
     // Datos de emisión
     @Column(name = "card_number", length = 16)
     private String cardNumber;
@@ -87,6 +94,16 @@ public class CardEntity {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    // ✅ NUEVOS: Campos para soft delete
+    @Column(name = "deleted", nullable = false)
+    private Boolean deleted = false;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
+    @Column(name = "deleted_by")
+    private String deletedBy;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
@@ -97,4 +114,18 @@ public class CardEntity {
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
     }
+
+    // ✅ Método para marcar como eliminado (soft delete)
+    public void markAsDeleted() {
+        this.deleted = true;
+        this.deletedAt = LocalDateTime.now();
+        // Opcionalmente puedes obtener el usuario actual del SecurityContext
+        // this.deletedBy = SecurityContextHolder.getContext().getAuthentication().getName();
+    }
+
+    // ✅ Método para verificar si está eliminado
+    public boolean isDeleted() {
+        return Boolean.TRUE.equals(deleted);
+    }
+
 }

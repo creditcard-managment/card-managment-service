@@ -193,7 +193,7 @@ public class CardController {
             @PathVariable String cardId,
             @Valid @RequestBody UpdatePinRequest request) {
 
-        cardManagementService.updatePin(cardId, request.getCurrentPin(), request.getNewPin());
+        cardManagementService.updatePin(cardId, request);
         return ResponseEntity.ok().build();
     }
 
@@ -213,8 +213,10 @@ public class CardController {
             @PathVariable String cardId,
             @Valid @RequestBody ReplaceCardRequest request) {
 
-        // Crea una NUEVA tarjeta y bloquea la anterior
-        CardResponse newCard = cardManagementService.replaceCard(cardId, request.getReason());
-        return ResponseEntity.ok(newCard);
+        log.info("Replacing card: {} due to: {}", cardId, request.getReason());
+
+        Card newCard = cardManagementService.replaceCard(cardId, request.getReason());
+
+        return ResponseEntity.ok(CardResponse.from(newCard));
     }
 }

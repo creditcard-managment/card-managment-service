@@ -1,6 +1,7 @@
 package com.unisono.card.lifecycle.infrastructure.statemachine.action;
 
-import com.unisono.card.lifecycle.domain.model.Card;
+import com.unisono.card.data.domain.model.Card;
+import com.unisono.card.lifecycle.domain.model.CardLifecycle;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleEvent;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleState;
 import com.unisono.card.lifecycle.domain.port.output.CardPort;
@@ -32,26 +33,20 @@ public class ApprovalAction implements Action<CardLifecycleState, CardLifecycleE
             log.info("Executing approval action for card: {} - Reason: {} - By: {}",
                     cardId.getValue(), reason, approvedBy);
 
-            // ✅ 1. Buscar tarjeta
             Card card = cardPort.findById(cardId)
-                    .orElseThrow(() -> new NotFoundException(
-                            "Card not found: " + cardId.getValue()
-                    ));
+                    .orElseThrow(() -> new NotFoundException("Card not found: " + cardId.getValue()));
 
-            // ✅ 2. Ejecutar lógica de negocio
-            card.approve();
+            // ✅ Usar CardLifecycle
+            CardLifecycle lifecycle = new CardLifecycle(card);
+            lifecycle.approve();
 
-            // ✅ 3. Persistir cambios
             cardPort.save(card);
 
             log.info("Card approved successfully: {}", cardId.getValue());
 
         } catch (Exception e) {
             log.error("Error approving card: {}", cardId.getValue(), e);
-
-            // Guardar error en el contexto para que pueda ser registrado
             context.getExtendedState().getVariables().put("error", e.getMessage());
-
             throw new RuntimeException("Failed to approve card: " + cardId.getValue(), e);
         }
     }

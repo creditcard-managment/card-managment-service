@@ -146,6 +146,50 @@ public class Card {
         }
     }
 
+    /**
+     * Cambia el PIN de la tarjeta
+     *
+     * @param currentPinHash Hash del PIN actual (para verificación)
+     * @param newPinHash Hash del nuevo PIN
+     */
+    public void updatePin(String currentPinHash, String newPinHash) {
+        validateNotCancelled();
+
+        // Validar que el PIN actual coincida
+        if (!this.pinHash.equals(currentPinHash)) {
+            throw new IllegalArgumentException("Current PIN is incorrect");
+        }
+
+        // Validar que el nuevo PIN sea diferente
+        if (this.pinHash.equals(newPinHash)) {
+            throw new IllegalArgumentException("New PIN must be different from current PIN");
+        }
+
+        this.pinHash = newPinHash;
+
+        log.info("PIN updated successfully for card: {}", this.id);
+    }
+
+    /**
+     * Verifica si la tarjeta tiene datos de emisión completos
+     */
+    public boolean hasIssuedData() {
+        return cardNumber != null
+                && cvv != null
+                && pinHash != null
+                && expirationDate != null;
+    }
+
+    /**
+     * Verifica si la tarjeta tiene al menos algunos datos de emisión
+     */
+    public boolean hasPartialIssuedData() {
+        return cardNumber != null
+                || cvv != null
+                || pinHash != null
+                || expirationDate != null;
+    }
+
     // =============================================
     // MÉTODOS DE ACTUALIZACIÓN
     // =============================================
