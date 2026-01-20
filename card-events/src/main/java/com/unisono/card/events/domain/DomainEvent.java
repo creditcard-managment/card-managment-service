@@ -14,7 +14,7 @@ public abstract class DomainEvent {
 
     private final String eventId;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss[.SSSSSS][.SSS]")
     private final LocalDateTime occurredOn;
 
     private final String eventType;

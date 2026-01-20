@@ -35,45 +35,26 @@ public class CardEventConsumer {
             containerFactory = "kafkaListenerContainerFactory"
     )
     public void consumeCardCreatedEvent(
-            @Payload String eventJson, // ✅ Recibir como String
+            @Payload CardCreatedEvent event,  // ✅ Directamente el objeto
             @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
             @Header(KafkaHeaders.OFFSET) long offset,
             Acknowledgment acknowledgment
     ) {
-        log.info("=================================================");
-        log.info("📥 [CardEventConsumer] Received message from Kafka");
+        log.info("📥 Received CardCreatedEvent:");
+        log.info("📥 Card ID: {}", event.getCardId());
+        log.info("📥 Client ID: {}", event.getClientId());
         log.info("📥 Partition: {}, Offset: {}", partition, offset);
-        log.info("📥 Raw JSON: {}", eventJson);
-        log.info("=================================================");
 
         try {
-            // ✅ Deserializar manualmente usando ObjectMapper
-            CardCreatedEvent event = kafkaObjectMapper.readValue(eventJson, CardCreatedEvent.class);
-
-            log.info("📥 Deserialized CardCreatedEvent:");
-            log.info("📥 Event ID: {}", event.getEventId());
-            log.info("📥 Card ID: {}", event.getCardId());
-            log.info("📥 Client ID: {}", event.getClientId());
-            log.info("📥 Holder: {}", event.getHolderFullName());
-            log.info("📥 Type: {}", event.getCardType());
-            log.info("📥 Category: {}", event.getCardCategory());
-
-            // Registrar transición de estado CREATE
             registerCreateTransition(event);
-
-            // Confirmar procesamiento
             acknowledgment.acknowledge();
-
-            log.info("✅ CardCreatedEvent processed successfully and acknowledged");
-            log.info("=================================================");
-
+            log.info("✅ Event processed successfully");
         } catch (Exception e) {
-            log.error("=================================================");
-            log.error("❌ ERROR processing CardCreatedEvent: {}", e.getMessage(), e);
-            log.error("=================================================");
-            // NO hacer acknowledge - el mensaje se reprocesará
+            log.error("❌ Error processing event: {}", e.getMessage(), e);
+            // No acknowledge - se reprocesará
         }
     }
+
 
     /**
      * Registra la transición de estado CREATE en state_transitions

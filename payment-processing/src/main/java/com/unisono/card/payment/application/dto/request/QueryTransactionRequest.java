@@ -26,10 +26,14 @@ public class QueryTransactionRequest {
     private LocalDateTime toDate;
 
     // Pagination
+    @Builder.Default
     private Integer page = 0;
+    @Builder.Default
     private Integer size = 20;
 
     // Sorting
+    @Builder.Default
     private String sortBy = "transactionDate";
+    @Builder.Default
     private String sortDirection = "DESC";
 }

@@ -1,0 +1,1 @@
+package com.unisono.card.merchant.infrastructure.adapter.persistence.jpa.entity;

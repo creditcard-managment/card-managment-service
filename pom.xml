@@ -70,7 +70,7 @@
         <module>card-limits</module>
         <module>card-lifecycle</module>
         <module>payment-processing</module>
-        <module>payment-processing</module>
+        <module>merchant-management</module>
     </modules>
 
     <!-- DEPENDENCY MANAGEMENT (versiones centralizadas) -->
@@ -107,7 +107,12 @@
                 <artifactId>payment-processing</artifactId>
                 <version>${project.version}</version>
             </dependency>
-            <!-- Spring Boot BOM -->
+            <dependency>
+                <groupId>com.unisono.card</groupId>
+                <artifactId>merchant-management</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+                        <!-- Spring Boot BOM -->
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>

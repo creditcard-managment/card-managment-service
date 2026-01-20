@@ -5,13 +5,12 @@ import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.BufferingClientHttpRequestFactory;
+import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.ClientHttpRequestInterceptor;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * RestTemplate configuration for external service calls
@@ -25,13 +24,28 @@ public class RestTemplateConfig {
         return builder
                 .setConnectTimeout(Duration.ofSeconds(5))
                 .setReadTimeout(Duration.ofSeconds(10))
-                .requestFactory(() -> {
-                    SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-                    factory.setBufferRequestBody(false);
-                    return new BufferingClientHttpRequestFactory(factory);
-                })
+                .requestFactory(this::clientHttpRequestFactory)
                 .interceptors(loggingInterceptor())
                 .build();
+    }
+
+    /**
+     * Create request factory with proper configuration
+     */
+    private ClientHttpRequestFactory clientHttpRequestFactory() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+
+        // Connection settings
+        factory.setConnectTimeout(Duration.ofSeconds(5));
+        factory.setReadTimeout(Duration.ofSeconds(10));
+
+        // ✅ Usar setChunkSize en lugar de setBufferRequestBody/setOutputStreaming
+        // 0 = no chunking (buffer completo)
+        // > 0 = chunked transfer encoding
+        factory.setChunkSize(0);
+
+        // Wrap with BufferingClientHttpRequestFactory to allow reading response multiple times
+        return new BufferingClientHttpRequestFactory(factory);
     }
 
     /**

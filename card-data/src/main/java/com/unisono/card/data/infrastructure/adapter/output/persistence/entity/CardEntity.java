@@ -32,64 +32,25 @@ import java.time.LocalDateTime;
 public class CardEntity {
 
     @Id
-    @Column(name = "id", nullable = false, length = 36)
-    private String id;
+    @Column(name = "card_id")
+    private String cardId;
 
-    @Column(name = "client_id", nullable = false, length = 20)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    private CardStatus status;
+
+    @Column(name = "client_id", nullable = false)
     private String clientId;
 
-    // =============================================
-    // DATOS DEL TITULAR
-    // =============================================
+    // Datos de emisión
+    @Column(name = "card_number", length = 16)
+    private String cardNumber;
 
-    @Column(name = "holder_first_name", nullable = false, length = 100)
-    private String holderFirstName;
+    @Column(name = "cvv", length = 4)
+    private String cvv;
 
-    @Column(name = "holder_last_name", nullable = false, length = 100)
-    private String holderLastName;
-
-    @Column(name = "holder_document_number", nullable = false, length = 20)
-    private String holderDocumentNumber;
-
-    @Column(name = "holder_email", nullable = false, length = 100)
-    private String holderEmail;
-
-    @Column(name = "holder_phone_number", length = 20)
-    private String holderPhoneNumber;
-
-    @Column(name = "holder_birth_date")
-    private LocalDate holderBirthDate;
-
-    @Column(name = "holder_address", length = 255)
-    private String holderAddress;
-
-    // =============================================
-    // DATOS SENSIBLES (ENCRIPTADOS EN BD)
-    // =============================================
-
-    @Column(name = "card_number_encrypted", columnDefinition = "TEXT")
-    private String cardNumberEncrypted;
-
-    @Column(name = "last_four_digits", length = 4)
-    private String lastFourDigits;  // Para búsquedas y display
-
-    @Column(name = "cvv_encrypted", columnDefinition = "TEXT")
-    private String cvvEncrypted;
-
-    @Column(name = "pin_hash", columnDefinition = "TEXT")
-    private String pinHash;  // BCrypt hash
-
-    // =============================================
-    // METADATOS DE LA TARJETA
-    // =============================================
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "type", nullable = false, length = 20)
-    private CardType type;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "category", nullable = false, length = 20)
-    private CardCategory category;
+    @Column(name = "pin_hash")
+    private String pinHash;
 
     @Column(name = "expiration_month")
     private Integer expirationMonth;
@@ -97,74 +58,43 @@ public class CardEntity {
     @Column(name = "expiration_year")
     private Integer expirationYear;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false, length = 20)
-    private CardStatus status;
+    // ✅ Campos de CardHolder (desnormalizados)
+    @Column(name = "holder_first_name")
+    private String holderFirstName;
 
-    // =============================================
-    // AUDITORÍA Y FECHAS DE CICLO DE VIDA
-    // =============================================
+    @Column(name = "holder_last_name")
+    private String holderLastName;
 
-    @CreationTimestamp
+    @Column(name = "holder_document_number")
+    private String holderDocumentNumber;
+
+    @Column(name = "holder_email")
+    private String holderEmail;
+
+    @Column(name = "holder_phone_number")
+    private String holderPhoneNumber;
+
+    @Column(name = "holder_birth_date")
+    private LocalDate holderBirthDate;
+
+    @Column(name = "holder_address", length = 500)
+    private String holderAddress;
+
+    // Auditoría
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    @UpdateTimestamp
-    @Column(name = "updated_at", nullable = false)
+    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
-
-    @Column(name = "activated_at")
-    private LocalDateTime activatedAt;
-
-    @Column(name = "blocked_at")
-    private LocalDateTime blockedAt;
-
-    @Column(name = "issued_at")  // ✅ AGREGADO
-    private LocalDateTime issuedAt;
-
-    @Column(name = "cancelled_at")  // ✅ AGREGADO
-    private LocalDateTime cancelledAt;
-
-    @Column(name = "expired_at")  // ✅ AGREGADO
-    private LocalDateTime expiredAt;
-
-    // =============================================
-    // RAZONES DE CAMBIOS DE ESTADO
-    // =============================================
-
-    @Column(name = "block_reason", length = 500)
-    private String blockReason;
-
-    @Column(name = "cancelled_reason", length = 500)  // ✅ AGREGADO
-    private String cancelledReason;
-
-    // =============================================
-    // SOFT DELETE
-    // =============================================
-
-    @Column(name = "deleted", nullable = false)
-    @Builder.Default
-    private Boolean deleted = false;
-
-    @Column(name = "deleted_at")
-    private LocalDateTime deletedAt;
-
-    // =============================================
-    // HELPER METHODS
-    // =============================================
 
     @PrePersist
     protected void onCreate() {
-        if (deleted == null) {
-            deleted = false;
-        }
+        createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
     }
 
-    /**
-     * Marca como eliminado (soft delete)
-     */
-    public void markAsDeleted() {
-        this.deleted = true;
-        this.deletedAt = LocalDateTime.now();
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
     }
 }

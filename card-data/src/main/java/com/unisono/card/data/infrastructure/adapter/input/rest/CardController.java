@@ -8,6 +8,10 @@ import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.port.input.CreateCardUseCase;
 import com.unisono.card.data.domain.port.input.GetCardUseCase;
 import com.unisono.card.data.domain.service.CardManagementService;
+import com.unisono.card.data.infrastructure.adapter.input.rest.dto.ReplaceCardRequest;
+import com.unisono.card.data.infrastructure.adapter.input.rest.dto.UpdateHolderDataRequest;
+import com.unisono.card.data.infrastructure.adapter.input.rest.dto.UpdatePinRequest;
+import com.unisono.card.data.infrastructure.adapter.input.rest.dto.UpdateStatusRequest;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
 import com.unisono.card.shared.domain.valueobject.ClientId;
@@ -173,23 +177,44 @@ public class CardController {
         return ResponseEntity.ok().build();
     }
 
-    @PutMapping("/{cardId}/card-data")
-    public ResponseEntity<Void> updateCardData(
+    // 1. Actualizar datos del titular (NO requiere nueva tarjeta)
+    @PutMapping("/{cardId}/holder-data")
+    public ResponseEntity<Void> updateHolderData(
             @PathVariable String cardId,
-            @RequestBody Map<String, Object> request) {
+            @Valid @RequestBody UpdateHolderDataRequest request) {
 
-        log.info("Actualizando datos de tarjeta: {}", cardId);
-
-        // ✅ Usar el servicio existente
-        cardManagementService.updateCardData(
-                cardId,
-                (String) request.get("cardNumber"),
-                (String) request.get("cvv"),
-                (String) request.get("pin"),
-                (Integer) request.get("expirationMonth"),
-                (Integer) request.get("expirationYear")
-        );
-
+        cardManagementService.updateHolderData(cardId, request);
         return ResponseEntity.ok().build();
+    }
+
+    // 2. Cambiar PIN (NO requiere nueva tarjeta)
+    @PutMapping("/{cardId}/pin")
+    public ResponseEntity<Void> updatePin(
+            @PathVariable String cardId,
+            @Valid @RequestBody UpdatePinRequest request) {
+
+        cardManagementService.updatePin(cardId, request.getCurrentPin(), request.getNewPin());
+        return ResponseEntity.ok().build();
+    }
+
+    // 3. Cambiar estado (bloquear/desbloquear)
+    @PutMapping("/{cardId}/status")
+    public ResponseEntity<Void> updateStatus(
+            @PathVariable String cardId,
+            @Valid @RequestBody UpdateStatusRequest request) {
+
+        cardManagementService.updateStatus(cardId, request.getStatus().toString());
+        return ResponseEntity.ok().build();
+    }
+
+    // 4. Reemplazar tarjeta (robo, pérdida, vencimiento)
+    @PostMapping("/{cardId}/replace")
+    public ResponseEntity<CardResponse> replaceCard(
+            @PathVariable String cardId,
+            @Valid @RequestBody ReplaceCardRequest request) {
+
+        // Crea una NUEVA tarjeta y bloquea la anterior
+        CardResponse newCard = cardManagementService.replaceCard(cardId, request.getReason());
+        return ResponseEntity.ok(newCard);
     }
 }

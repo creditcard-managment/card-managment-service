@@ -2,15 +2,17 @@ package com.unisono.card.data.domain.model;
 
 import com.unisono.card.shared.domain.valueobject.*;
 import lombok.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
-@Getter
+@Data
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
 @ToString
+@Slf4j
 public class Card {
 
     private CardId id;
@@ -221,6 +223,89 @@ public class Card {
         this.deleted = true;
         this.deletedAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
+    }
+
+    public void updateHolderEmail(String email) {
+        validateNotCancelled();
+
+        if (email == null || email.isBlank()) {
+            throw new IllegalArgumentException("Email cannot be null or empty");
+        }
+
+        // Crear un nuevo CardHolder con el email actualizado
+        this.holder = new CardHolder(
+                this.holder.getFirstName(),
+                this.holder.getLastName(),
+                this.holder.getDocumentNumber(),
+                email, // ← NUEVO email
+                this.holder.getPhoneNumber(),
+                this.holder.getBirthDate(),
+                this.holder.getAddress()
+        );
+
+        log.debug("Email updated for card: {}", this.id);
+    }
+
+    /**
+     * Actualiza el teléfono del titular
+     */
+    public void updateHolderPhoneNumber(String phoneNumber) {
+        validateNotCancelled();
+
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            throw new IllegalArgumentException("Phone number cannot be null or empty");
+        }
+
+        // Crear un nuevo CardHolder con el teléfono actualizado
+        this.holder = new CardHolder(
+                this.holder.getFirstName(),
+                this.holder.getLastName(),
+                this.holder.getDocumentNumber(),
+                this.holder.getEmail(),
+                phoneNumber, // ← NUEVO teléfono
+                this.holder.getBirthDate(),
+                this.holder.getAddress()
+        );
+
+        log.debug("Phone number updated for card: {}", this.id);
+    }
+
+    /**
+     * Actualiza la dirección del titular
+     */
+    public void updateHolderAddress(String address) {
+        validateNotCancelled();
+
+        if (address == null || address.isBlank()) {
+            throw new IllegalArgumentException("Address cannot be null or empty");
+        }
+
+        // Crear un nuevo CardHolder con la dirección actualizada
+        this.holder = new CardHolder(
+                this.holder.getFirstName(),
+                this.holder.getLastName(),
+                this.holder.getDocumentNumber(),
+                this.holder.getEmail(),
+                this.holder.getPhoneNumber(),
+                this.holder.getBirthDate(),
+                address // ← NUEVA dirección
+        );
+
+        log.debug("Address updated for card: {}", this.id);
+    }
+
+    /**
+     * Valida que la tarjeta no esté cancelada
+     */
+    private void validateNotCancelled() {
+        if (this.status == CardStatus.CANCELLED) {
+            throw new IllegalStateException("Cannot modify a cancelled card");
+        }
+    }
+
+    // Getter
+    public CardHolder getHolder() {
+        return holder;
     }
 
     // =============================================

@@ -22,7 +22,7 @@ public class CardNumber implements Serializable {
 
     private final String value;
 
-    private CardNumber(String value) {
+    public CardNumber(String value) {
         this.value = value;
     }
 

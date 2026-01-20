@@ -26,6 +26,7 @@ public class CardJpaEntity {
     private String status;
 
     @Column(name = "deleted", nullable = false)
+    @Builder.Default
     private Boolean deleted = false;
 
     // ✅ NUEVOS: Datos de emisión

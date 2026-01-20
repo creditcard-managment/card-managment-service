@@ -23,7 +23,7 @@ public class CVV implements Serializable {
 
     private final String value;
 
-    private CVV(String value) {
+    public CVV(String value) {
         this.value = value;
     }
 

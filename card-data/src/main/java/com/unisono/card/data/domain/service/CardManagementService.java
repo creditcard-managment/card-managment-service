@@ -1,12 +1,24 @@
 package com.unisono.card.data.domain.service;
 
 import com.unisono.card.data.domain.event.CardCreatedDomainEvent;
+import com.unisono.card.data.domain.event.CardHolderDataUpdatedEvent;
+import com.unisono.card.data.domain.event.CardPinUpdatedEvent;
+import com.unisono.card.data.domain.exception.CardNotFoundException;
 import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.port.input.CreateCardUseCase;
 import com.unisono.card.data.domain.port.input.GetCardUseCase;
 import com.unisono.card.data.domain.port.output.CardRepository;
+import com.unisono.card.data.infrastructure.adapter.input.rest.dto.UpdateHolderDataRequest;
+import com.unisono.card.data.infrastructure.adapter.input.rest.dto.UpdatePinRequest;
+import com.unisono.card.events.domain.CardCancelledDomainEvent;
 import com.unisono.card.shared.domain.exception.NotFoundException;
-import com.unisono.card.shared.domain.valueobject.*;
+import com.unisono.card.shared.domain.valueobject.CVV;
+import com.unisono.card.shared.domain.valueobject.CardId;
+import com.unisono.card.shared.domain.valueobject.CardNumber;
+import com.unisono.card.shared.domain.valueobject.CardStatus;
+import com.unisono.card.shared.domain.valueobject.ClientId;
+import com.unisono.card.shared.domain.valueobject.ExpirationDate;
+import com.unisono.card.shared.domain.valueobject.PIN;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -29,6 +41,9 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase 
 
     private final CardRepository cardRepository;
     private final ApplicationEventPublisher eventPublisher;
+
+    private final PinEncryptionService pinEncryptionService;
+
     // ========================================
     // CreateCardUseCase
     // ========================================
@@ -55,6 +70,63 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase 
         log.info("🔵 ✅ CardCreatedDomainEvent published to Spring");
 
         return savedCard;
+    }
+
+    @Transactional
+    public void updateHolderData(String cardId, UpdateHolderDataRequest request) {
+
+        log.info("Updating holder data for card: {}", cardId);
+
+        // 1. Convertir String a CardId y buscar la tarjeta
+        Card card = cardRepository.findById(new CardId(cardId))
+                .orElseThrow(() -> new CardNotFoundException(new CardId(cardId)));
+
+        // 2. Validar que la tarjeta esté activa (opcional según reglas de negocio)
+        if (card.getStatus() == CardStatus.CANCELLED) {
+            throw new IllegalStateException("Cannot update holder data for a cancelled card");
+        }
+
+        // 3. Actualizar solo los campos que vienen (partial update)
+        boolean hasChanges = false;
+
+        if (request.getHolderEmail() != null && !request.getHolderEmail().isBlank()) {
+            card.updateHolderEmail(request.getHolderEmail());
+            hasChanges = true;
+            log.debug("Email updated for card: {}", cardId);
+        }
+
+        if (request.getHolderPhoneNumber() != null && !request.getHolderPhoneNumber().isBlank()) {
+            card.updateHolderPhoneNumber(request.getHolderPhoneNumber());
+            hasChanges = true;
+            log.debug("Phone number updated for card: {}", cardId);
+        }
+
+        if (request.getHolderAddress() != null && !request.getHolderAddress().isBlank()) {
+            card.updateHolderAddress(request.getHolderAddress());
+            hasChanges = true;
+            log.debug("Address updated for card: {}", cardId);
+        }
+
+        if (!hasChanges) {
+            log.warn("No valid fields to update for card: {}", cardId);
+            throw new IllegalArgumentException("At least one field must be provided for update");
+        }
+
+        // 4. Guardar cambios
+        cardRepository.save(card);
+
+        log.info("Holder data updated successfully for card: {}", cardId);
+
+        // 5. Publicar evento de dominio
+        eventPublisher.publishEvent(new CardHolderDataUpdatedEvent(
+                new CardId(cardId),
+                request.getHolderEmail(),
+                request.getHolderPhoneNumber(),
+                request.getHolderAddress(),
+                LocalDateTime.now()
+        ));
+
+        log.info("🟢 CardHolderDataUpdatedEvent published for card: {}", cardId);
     }
 
     // ========================================
@@ -155,5 +227,109 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase 
         cardRepository.save(card);
 
         log.info("Datos de tarjeta actualizados exitosamente");
+    }
+
+    @Transactional
+    public Card replaceCard(CardId oldCardId, String reason) {
+        log.info("Replacing card: {} due to: {}", oldCardId, reason);
+
+        // 1. Buscar tarjeta anterior
+        Card oldCard = cardRepository.findById(oldCardId)
+                .orElseThrow();
+
+        // 2. Validar que no esté ya cancelada
+        if (oldCard.getStatus() == CardStatus.CANCELLED) {
+            throw new IllegalStateException("Cannot replace an already cancelled card");
+        }
+
+        // 3. Crear nueva tarjeta reutilizando los datos del titular
+        Card newCard = Card.create(
+                oldCard.getClientId(),
+                oldCard.getHolder(),      // ← MISMO titular
+                oldCard.getType(),        // ← MISMO tipo
+                oldCard.getCategory()     // ← MISMA categoría
+        );
+
+        // 4. Cancelar tarjeta anterior
+        oldCard.cancel(reason);
+        cardRepository.save(oldCard);
+
+        // 5. Publicar evento de cancelación
+        log.info("🔴 Publishing CardCancelledDomainEvent to Spring...");
+        eventPublisher.publishEvent(new CardCancelledDomainEvent(
+                oldCard.getId(),
+                oldCard.getCardNumber().getMasked(),
+                reason,
+                LocalDateTime.now()
+        ));
+        log.info("🔴 ✅ CardCancelledDomainEvent published");
+
+        // 6. Guardar nueva tarjeta y publicar evento
+        Card savedCard = saveAndPublishCardCreated(newCard);
+
+        log.info("Card {} replaced successfully with new card: {}", oldCardId, savedCard.getId());
+
+        return savedCard;
+    }
+    @Transactional
+    public void updatePin(String cardId, UpdatePinRequest request) {
+
+        log.info("Updating PIN for card: {}", cardId);
+
+        // 1. Buscar la tarjeta
+        Card card = cardRepository.findById(new CardId(cardId))
+                .orElseThrow(() -> new CardNotFoundException(new CardId(cardId)));
+
+        // 2. Validar que la tarjeta esté activa
+        if (card.getStatus() == CardStatus.CANCELLED) {
+            throw new IllegalStateException("Cannot update PIN for a cancelled card");
+        }
+
+        // 3. Verificar que el PIN actual sea correcto
+        if (!pinEncryptionService.matches(request.getCurrentPin(), card.getPinHash())) {
+            log.warn("Invalid current PIN attempt for card: {}", cardId);
+            throw new IllegalArgumentException("Current PIN is incorrect");
+        }
+
+        // 4. Validar que el nuevo PIN sea diferente
+        if (request.getCurrentPin().equals(request.getNewPin())) {
+            throw new IllegalArgumentException("New PIN must be different from current PIN");
+        }
+
+        // 5. Encriptar el nuevo PIN
+        String newPinHash = pinEncryptionService.encrypt(request.getNewPin());
+
+        // 6. Actualizar el PIN en el dominio
+        card.updatePin(card.getPinHash(), newPinHash);
+
+        // 7. Guardar
+        cardRepository.save(card);
+
+        log.info("PIN updated successfully for card: {}", cardId);
+
+        // 8. Publicar evento
+        eventPublisher.publishEvent(new CardPinUpdatedEvent(
+                new CardId(cardId),
+                LocalDateTime.now()
+        ));
+
+        log.info("🟣 CardPinUpdatedEvent published for card: {}", cardId);
+    }
+
+    // ========================================
+    // MÉTODO PRIVADO REUTILIZABLE
+    // ========================================
+    private Card saveAndPublishCardCreated(Card card) {
+        // Guardar en BD
+        Card savedCard = cardRepository.save(card);
+
+        log.info("Card created successfully with ID: {}", savedCard.getId());
+
+        // Publicar evento
+        log.info("🔵 Publishing CardCreatedDomainEvent to Spring...");
+        eventPublisher.publishEvent(new CardCreatedDomainEvent(savedCard));
+        log.info("🔵 ✅ CardCreatedDomainEvent published to Spring");
+
+        return savedCard;
     }
 }

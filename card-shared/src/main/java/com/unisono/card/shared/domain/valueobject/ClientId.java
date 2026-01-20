@@ -21,7 +21,7 @@ public class ClientId implements Serializable {
 
     private final String value;
 
-    private ClientId(String value) {
+    public ClientId(String value) {
         this.value = value;
     }
 

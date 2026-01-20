@@ -4,6 +4,7 @@ import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.model.CardCategory;
 import com.unisono.card.data.domain.model.CardHolder;
 import com.unisono.card.data.domain.model.CardType;
+import com.unisono.card.data.infrastructure.adapter.input.rest.dto.UpdateHolderDataRequest;
 import com.unisono.card.shared.domain.valueobject.ClientId;
 
 /**
@@ -21,6 +22,8 @@ public interface CreateCardUseCase {
      * @return la tarjeta creada
      */
     Card execute(CreateCardCommand command);
+
+    void updateHolderData(String cardId, UpdateHolderDataRequest request);
 
     /**
      * Command para crear una tarjeta

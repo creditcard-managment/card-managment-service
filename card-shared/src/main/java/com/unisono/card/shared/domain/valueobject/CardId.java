@@ -20,7 +20,7 @@ public class CardId implements Serializable {
 
     private final String value;
 
-    private CardId(String value) {
+    public CardId(String value) {
         this.value = value;
     }
 

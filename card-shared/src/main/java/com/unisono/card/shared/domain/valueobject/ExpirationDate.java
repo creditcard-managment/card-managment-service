@@ -18,7 +18,7 @@ public class ExpirationDate {
     private final int month; // ✅ Generará getMonth()
     private final int year;  // ✅ Generará getYear()
 
-    private ExpirationDate(int month, int year) {
+    public ExpirationDate(int month, int year) {
         validate(month, year);
         this.month = month;
         this.year = year;
