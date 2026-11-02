@@ -1,5 +1,7 @@
 package com.unisono.card.shared.domain.valueobject;
 
+import com.unisono.card.shared.domain.exception.BusinessRuleException;
+import com.unisono.card.shared.domain.exception.InvalidValueObjectException;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 
@@ -36,13 +38,18 @@ public class Money implements Serializable {
      */
     public static Money of(BigDecimal amount, String currencyCode) {
         if (amount == null) {
-            throw new IllegalArgumentException("Amount cannot be null");
+            throw new InvalidValueObjectException("Amount cannot be null");
         }
         if (currencyCode == null || currencyCode.isBlank()) {
-            throw new IllegalArgumentException("Currency code cannot be null or blank");
+            throw new InvalidValueObjectException("Currency code cannot be null or blank");
         }
 
-        Currency currency = Currency.getInstance(currencyCode);
+        Currency currency;
+        try {
+            currency = Currency.getInstance(currencyCode);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidValueObjectException("Invalid currency code: " + currencyCode, e);
+        }
         return new Money(amount, currency);
     }
 
@@ -51,10 +58,10 @@ public class Money implements Serializable {
      */
     public static Money of(BigDecimal amount, Currency currency) {
         if (amount == null) {
-            throw new IllegalArgumentException("Amount cannot be null");
+            throw new InvalidValueObjectException("Amount cannot be null");
         }
         if (currency == null) {
-            throw new IllegalArgumentException("Currency cannot be null");
+            throw new InvalidValueObjectException("Currency cannot be null");
         }
 
         return new Money(amount, currency);
@@ -119,7 +126,7 @@ public class Money implements Serializable {
 
     public Money divide(BigDecimal divisor) {
         if (divisor.compareTo(BigDecimal.ZERO) == 0) {
-            throw new IllegalArgumentException("Cannot divide by zero");
+            throw new InvalidValueObjectException("Cannot divide by zero");
         }
         return new Money(this.amount.divide(divisor, 2, RoundingMode.HALF_UP), this.currency);
     }
@@ -156,7 +163,7 @@ public class Money implements Serializable {
 
     private void validateSameCurrency(Money other) {
         if (!this.currency.equals(other.currency)) {
-            throw new IllegalArgumentException(
+            throw new BusinessRuleException(
                     String.format("Cannot operate on different currencies: %s and %s",
                             this.currency.getCurrencyCode(),
                             other.currency.getCurrencyCode())

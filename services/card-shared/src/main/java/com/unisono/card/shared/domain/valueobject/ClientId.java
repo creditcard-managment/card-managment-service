@@ -1,6 +1,6 @@
 package com.unisono.card.shared.domain.valueobject;
 
-import com.unisono.card.shared.domain.exception.ValidationException;
+import com.unisono.card.shared.domain.exception.InvalidValueObjectException;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
@@ -32,19 +32,19 @@ public class ClientId implements Serializable {
 
     private static void validate(String value) {
         if (StringUtils.isBlank(value)) {
-            throw new ValidationException("ClientId no puede ser nulo o vacío");
+            throw new InvalidValueObjectException("ClientId no puede ser nulo o vacío");
         }
 
         String sanitized = sanitize(value);
 
         if (sanitized.length() < MIN_LENGTH || sanitized.length() > MAX_LENGTH) {
-            throw new ValidationException(
+            throw new InvalidValueObjectException(
                     String.format("ClientId debe tener entre %d y %d dígitos", MIN_LENGTH, MAX_LENGTH)
             );
         }
 
         if (!sanitized.matches("\\d+")) {
-            throw new ValidationException("ClientId debe contener solo dígitos");
+            throw new InvalidValueObjectException("ClientId debe contener solo dígitos");
         }
     }
 

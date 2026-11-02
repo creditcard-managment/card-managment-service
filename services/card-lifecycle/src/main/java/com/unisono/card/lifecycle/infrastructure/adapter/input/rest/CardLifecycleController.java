@@ -100,7 +100,7 @@ public class CardLifecycleController {
         CardNumber cardNumber = CardNumber.of(request.getCardNumber());
         CVV cvv = CVV.of(request.getCvv());
         PIN pin = PIN.of(request.getPin());
-        ExpirationDate expirationDate = ExpirationDate.of(
+        ExpirationDate expirationDate = ExpirationDate.forIssuance(
                 request.getExpirationMonth(),
                 request.getExpirationYear()
         );

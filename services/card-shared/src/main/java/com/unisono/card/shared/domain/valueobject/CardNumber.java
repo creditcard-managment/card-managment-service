@@ -1,6 +1,6 @@
 package com.unisono.card.shared.domain.valueobject;
 
-import com.unisono.card.shared.domain.exception.ValidationException;
+import com.unisono.card.shared.domain.exception.InvalidValueObjectException;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
@@ -37,24 +37,24 @@ public class CardNumber implements Serializable {
 
     private static void validate(String value) {
         if (StringUtils.isBlank(value)) {
-            throw new ValidationException("El número de tarjeta no puede ser nulo o vacío");
+            throw new InvalidValueObjectException("El número de tarjeta no puede ser nulo o vacío");
         }
 
         String sanitized = sanitize(value);
 
         if (sanitized.length() < MIN_LENGTH || sanitized.length() > MAX_LENGTH) {
-            throw new ValidationException(
+            throw new InvalidValueObjectException(
                     String.format("El número de tarjeta debe tener entre %d y %d dígitos",
                             MIN_LENGTH, MAX_LENGTH)
             );
         }
 
         if (!sanitized.matches("\\d+")) {
-            throw new ValidationException("El número de tarjeta debe contener solo dígitos");
+            throw new InvalidValueObjectException("El número de tarjeta debe contener solo dígitos");
         }
 
         if (!isValidLuhn(sanitized)) {
-            throw new ValidationException("El número de tarjeta no pasa la validación de Luhn");
+            throw new InvalidValueObjectException("El número de tarjeta no pasa la validación de Luhn");
         }
     }
 

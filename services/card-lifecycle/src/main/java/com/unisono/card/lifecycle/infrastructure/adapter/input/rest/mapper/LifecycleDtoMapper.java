@@ -99,7 +99,7 @@ public class LifecycleDtoMapper {
                 CardNumber.of(request.getCardNumber()),
                 CVV.of(request.getCvv()),
                 PIN.of(request.getPin()), // Se validará y encriptará después
-                ExpirationDate.of(request.getExpirationMonth(), request.getExpirationYear()),
+                ExpirationDate.forIssuance(request.getExpirationMonth(), request.getExpirationYear()),
                 request.getReason(),
                 request.getIssuedBy()
         );
