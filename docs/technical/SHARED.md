@@ -6,7 +6,7 @@
 |---|---|
 | Artefacto Maven | `com.unisono.card:card-shared` (`1.0.0-SNAPSHOT`) |
 | Tipo | Librería `jar` (sin `main`, sin contenedor propio) |
-| Dependencias | `spring-boot-starter`, `spring-boot-starter-validation`, `spring-security-crypto`, `commons-lang3`, `bcprov-jdk18on`, `jackson-databind`, `lombok` |
+| Dependencias | `spring-boot-starter`, `spring-security-crypto`, `commons-lang3`, `lombok` |
 | Paquetes | `…shared.domain.valueobject`, `…shared.domain.exception`, `…shared.infrastructure.security`, `…shared.infrastructure.config` |
 | Usada por | `card-data`, `card-lifecycle`, `card-limits`, `payment-processing` |
 | Tests | 8 clases: value objects (`CardStatus`, `CardId`, `CardNumber`, `ExpirationDate`, `Money`, `Percentage`, validación común) y `AesEncryptionService` |
@@ -401,5 +401,3 @@ No hay tests de las reglas de `PIN` ni de `BCryptHashingService`.
 2. **Sin job de re-cifrado.** Una tarjeta pasa a la clave activa solo cuando se vuelve a guardar. Para retirar una clave vieja (o la legacy) hay que esperar a que se re-guarden todas, o re-guardarlas a mano.
 3. **`Percentage` sin uso.** `card-limits` modela `cashAdvancePercentage` como `Double`.
 4. **Tests incompletos.** Faltan tests de las reglas de `PIN` y de `BCryptHashingService`.
-5. **README desactualizado.** `services/card-shared/README.md` describe tests inexistentes (cobertura > 90 %), una estructura de archivos y un `application-card-shared.yml` que no existen, y tiene bloques de código mal cerrados.
-6. **Dependencias sin uso.** `spring-boot-starter-validation` y `bcprov-jdk18on` (Bouncy Castle) no se usan: el cifrado va por el proveedor JCE estándar.
