@@ -22,7 +22,7 @@ public class CreditLimitAdapter implements CreditLimitPort {
 
     private final RestTemplate restTemplate;
 
-    @Value("${services.card-limits.url:http://localhost:8080}")
+    @Value("${services.card-limits.url:http://localhost:8082}")
     private String cardLimitsServiceUrl;
 
     @Override

@@ -96,7 +96,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256Key!!}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256!!123}
       SERVER_PORT: 8081
     ports:
       - "8081:8081"
@@ -121,7 +121,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256Key!!}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256!!123}
       SERVER_PORT: 8082
     ports:
       - "8082:8082"
@@ -146,7 +146,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256Key!!}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256!!123}
       SERVER_PORT: 8083
     ports:
       - "8083:8083"
@@ -173,7 +173,10 @@ services:
       SPRING_DATASOURCE_PASSWORD: postgres
       # Sobreescribe el localhost:9092 del yml → apunta al broker interno
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256Key!!}
+      # Servicios internos por nombre de contenedor (localhost no sirve dentro de Docker)
+      CARD_DATA_SERVICE_URL: http://card-data-service:8081
+      CARD_LIMITS_SERVICE_URL: http://card-limits-service:8082
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256!!123}
       SERVER_PORT: 8085
     ports:
       - "8085:8085"

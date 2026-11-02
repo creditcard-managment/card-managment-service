@@ -426,7 +426,7 @@ Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, s
 | `spring.kafka.consumer.group-id` | `card-lifecycle-consumer-group` |
 | `spring.kafka.listener.ack-mode` | `manual` |
 | `card-data.base-url` | `http://localhost:8081` (default en `CardDataRestClient`) |
-| `encryption.secret-key` | clave de desarrollo |
+| `encryption.secret-key` | `${ENCRYPTION_KEY}`, por defecto una clave de desarrollo |
 
 El perfil `card-lifecycle` (`application-card-lifecycle.yml`, activado por docker-compose) agrega logging a `logs/card-lifecycle.log`, Prometheus, SpringDoc y endpoints de actuator. Las propiedades `card-lifecycle.transitions.*` (timeout, reintentos) y `card-lifecycle.audit.*` (retención) están declaradas pero **ningún código las lee**.
 
@@ -465,7 +465,6 @@ Comportamientos actuales del código que conviene resolver:
 10. **Consistencia entre servicios.** Emisión y activación hacen 2 llamadas REST seguidas: si la segunda falla, `card-data` queda a medio actualizar y no hay compensación. Si falla el guardado de la transición después de las llamadas, el cambio en `card-data` ya está hecho y no queda historial. `RestTemplate` no tiene timeouts.
 11. **Manejo del consumidor Kafka.** Al fallar no hace ack, pero tampoco relanza la excepción, así que el `DefaultErrorHandler` no actúa. El mensaje solo se reprocesa si el consumidor se reinicia antes de confirmar un offset posterior; si después llega un mensaje correcto, su ack confirma también el offset del fallido y el fallido se pierde.
 12. **Errores HTTP poco precisos.** Sin `@RestControllerAdvice`, una transición inválida o una tarjeta inexistente devuelven 500 en lugar de 409/422 o 404. `InvalidStateTransitionException` está definida pero no se usa.
-13. **docker-compose incompleto.** Faltan `CARD_DATA_BASE_URL` (por ejemplo `http://card-data-service:8081`) y `SPRING_KAFKA_BOOTSTRAP_SERVERS`, y no hay `depends_on`, así que dentro del contenedor los defaults apuntan a `localhost`. `ENCRYPTION_KEY` no corresponde a ninguna propiedad leída.
+13. **docker-compose incompleto.** Faltan `CARD_DATA_BASE_URL` (por ejemplo `http://card-data-service:8081`) y `SPRING_KAFKA_BOOTSTRAP_SERVERS`, y no hay `depends_on`, así que dentro del contenedor los defaults apuntan a `localhost`.
 14. **Código muerto:** `hashPin()` en el controller, `LifecycleDtoMapper.toIssueCardCommand` y su record interno, `application/dto/response/LifecycleHistoryResponse` (duplicado del DTO REST), `TransitionContext`, `StateMachineActionConfig` (vacío) y las propiedades `card-lifecycle.*` del perfil.
 15. **Sin tests.** El módulo no tiene `src/test`, aunque `spring-statemachine-test` está declarado en el `pom.xml`.
-16. **Sin autenticación.** `performedBy` es un campo libre del request; la auditoría no está ligada a una identidad verificada.

@@ -41,7 +41,8 @@ server:
   port: 8083
 
 encryption:
-  secret-key: "SecretKey32CharsForEncryption!!!"
+  # Variable ENCRYPTION_KEY (docker-compose). ⚠️ Definirla en producción: exactamente 32 caracteres
+  secret-key: "${ENCRYPTION_KEY:SecretKey32CharsForEncryption!!!}"
 
 management:
   endpoints:

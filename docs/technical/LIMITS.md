@@ -455,7 +455,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
    - `POST /api/v1/credit-limits/{cardId}/consume`
    - `POST /api/v1/credit-limits/{cardId}/restore`
 
-   Ninguna de esas rutas existe, usan `cardId` donde `card-limits` espera `creditLimitId`, y la URL por defecto es `localhost:8080` en lugar de `8082`. Como el adapter captura el error y devuelve un disponible de `0 USD`, las consultas de fondos de los pagos dan siempre sin saldo.
+   Ninguna de esas rutas existe, y usan `cardId` donde `card-limits` espera `creditLimitId`. Como el adapter captura el error y devuelve un disponible de `0 USD`, las consultas de fondos de los pagos dan siempre sin saldo.
 2. **Sin control de concurrencia.** `CreditLimitEntity` no tiene `@Version` y el flujo es leer → modificar → guardar. Dos consumos simultáneos sobre el mismo límite pueden pisarse (*lost update*) y permitir gastar más que el disponible.
 3. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda termina en `IllegalArgumentException` (“Cannot operate on different currencies”) y responde 500.
 
@@ -478,4 +478,3 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 15. **`CreditLimitManagementService` se declara dos veces:** con `@Service` y como `@Bean` en `CreditLimitUseCaseConfig`. Lo mismo pasa con `CreditValidationService`.
 16. **Sin eventos:** no publica `credit-limit.assigned`, `credit-limit.consumed`, etc., aunque los topics existen en `card-events` ([EVENTS.md §3](EVENTS.md)).
 17. **Sin tests:** no hay `src/test`, aunque `pom.xml` declara JUnit, Mockito y Testcontainers.
-18. **Sin autenticación:** `assignedBy` y `changedBy` son texto libre del request.

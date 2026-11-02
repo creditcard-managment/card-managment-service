@@ -19,7 +19,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
         format_sql: true
@@ -46,7 +46,8 @@ server:
   port: 8081
 
 encryption:
-  secret-key: "MySecretKey32BytesForAES256!!123" # ⚠️ CAMBIAR EN PRODUCCIÓN (exactamente 32 caracteres)
+  # Variable ENCRYPTION_KEY (docker-compose). ⚠️ Definirla en producción: exactamente 32 caracteres
+  secret-key: "${ENCRYPTION_KEY:MySecretKey32BytesForAES256!!123}"
 
 management:
   endpoints:
@@ -61,6 +62,9 @@ management:
 logging:
   level:
     com.unisono.card: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.springframework.kafka: DEBUG  # ✅ Activar logs de Kafka
-    org.apache.kafka: INFO            # ✅ Logs de cliente Kafka
+    # SQL de Hibernate apagado: el OutboxRelay consulta cada segundo y BasicBinder (TRACE)
+    # loguearía los valores de los parámetros (datos del titular, PAN/CVV cifrados, hash del PIN).
+    # Para depurar: LOGGING_LEVEL_ORG_HIBERNATE_SQL=DEBUG
+    org.hibernate.SQL: INFO
+    org.springframework.kafka: INFO
+    org.apache.kafka: INFO

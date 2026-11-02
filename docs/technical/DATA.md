@@ -47,7 +47,7 @@ com.unisono.card.data
 │   │                  ValidatePIN, ResetPIN, UpdateCardStatus)
 │   ├── port.output    CardRepository, EncryptionPort, EventOutboxPort
 │   └── service        CardManagementService, CardSecurityService,
-│                      PINManagementService, CardValidationService, CreateCardService
+│                      PINManagementService
 ├── application
 │   ├── dto            Requests / Responses de la API
 │   └── mapper         CardDtoMapper (DTO ⇄ dominio)
@@ -59,7 +59,7 @@ com.unisono.card.data
     │                                OutboxEventAdapter, OutboxEventEntity,
     │                                JpaOutboxEventRepository
     ├── adapter.output.encryption    CardEncryptionAdapter
-    ├── adapter.output.event         OutboxRelay, OutboxCleaner, KafkaEventPublisher
+    ├── adapter.output.event         OutboxRelay, OutboxCleaner
     └── config                       DataSource (Hikari), Kafka producer,
                                      Use cases, Swagger
 ```
@@ -475,7 +475,8 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 | CVV | Cifrado AES | `CardRepositoryAdapter` |
 | PIN | Hash BCrypt (`BCryptHashingService`); el PIN en claro solo vive en memoria y está excluido de `toString()` | `CardEntityMapper` / `PINManagementService` |
 
-- La clave AES se lee de `encryption.secret-key` (por defecto un valor de desarrollo de 32 caracteres). **Debe sobrescribirse en producción.**
+- La clave AES se lee de `encryption.secret-key`, que toma la variable de entorno `ENCRYPTION_KEY` (la que define docker-compose). Por defecto es un valor de desarrollo de 32 caracteres; **debe definirse en producción**. Si la clave no tiene exactamente 32 bytes, el servicio no arranca.
+- Cambiar la clave deja ilegibles los PAN y CVV ya cifrados: leer una tarjeta cifrada con otra clave responde 500. No hay rotación de claves.
 - Las respuestas REST solo devuelven el número enmascarado.
 - Los endpoints no tienen autenticación ni autorización (no hay Spring Security en el módulo).
 
@@ -513,9 +514,8 @@ Payload (JSON, sin headers de tipo):
 - Publica el JSON almacenado tal cual y espera el ack del broker.
 - Ante un error transitorio registra `attempts` y `last_error` y corta el lote, para no publicar fuera de orden; ante uno permanente marca `failed_at` y sigue (§5.1).
 
-`KafkaEventPublisher` solo lo usa `CreateCardService`, que no está en uso (§10).
 
-Las clases `CardBlockedEvent`, `CardUnblockedEvent` y `PINResetEvent` existen vacías: hoy **no se publican eventos** de bloqueo, desbloqueo ni cambio de PIN, aunque `card-events` ya define los topics `card.blocked` y `card.unblocked`. Ver [EVENTS.md](EVENTS.md).
+Hoy **no se publican eventos** de bloqueo, desbloqueo ni cambio de PIN, aunque `card-events` ya define los topics `card.blocked` y `card.unblocked`. Ver [EVENTS.md](EVENTS.md).
 
 ---
 
@@ -532,7 +532,7 @@ Las clases `CardBlockedEvent`, `CardUnblockedEvent` y `PINResetEvent` existen va
 | `spring.jpa.hibernate.ddl-auto` | `validate` |
 | `spring.flyway.enabled` | `false` |
 | `spring.kafka.bootstrap-servers` | `localhost:9092` |
-| `encryption.secret-key` | clave de desarrollo (32 caracteres) |
+| `encryption.secret-key` | `${ENCRYPTION_KEY}`, por defecto una clave de desarrollo (32 caracteres) |
 | `card.data.outbox.poll-interval-ms` | `1000` (frecuencia del relay) |
 | `card.data.outbox.batch-size` | `50` (eventos por pasada) |
 | `card.data.outbox.send-timeout-ms` | `15000` (debe superar `delivery.timeout.ms` + `max.block.ms`) |
@@ -555,7 +555,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-data-service
 
 - Health: `GET /actuator/health` (incluye estado de la base).
 - Métricas: `GET /actuator/metrics` (y `/actuator/prometheus` con el perfil `card-data`).
-- Logs: `com.unisono.card` en `DEBUG`; SQL de Hibernate en `DEBUG`.
+- Logs: `com.unisono.card` en `DEBUG`. El SQL de Hibernate está apagado: el relay consulta cada segundo y el log de parámetros (`BasicBinder` en `TRACE`) expondría datos sensibles. Para depurar consultas: `LOGGING_LEVEL_ORG_HIBERNATE_SQL=DEBUG`; nunca activar `BasicBinder`.
 
 ---
 
@@ -563,11 +563,5 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-data-service
 
 Comportamientos actuales del código que conviene tener presentes:
 
-1. **Logs de SQL del relay.** Con `org.hibernate.SQL` en `DEBUG` (configuración actual), el relay loguea su consulta cada segundo aunque no haya eventos.
-2. **Código duplicado o sin uso:** `CreateCardService` (camino alternativo de alta que publica directo a Kafka sin pasar por el outbox; no lo usa ningún controller), `CardHolderEmbeddable` (con longitudes distintas a `CardEntity`), `CardHolderEntity`, `CardJpaConfig`, `application/config/CardUseCaseConfig` y las excepciones de `domain/exception` (clases vacías). `CardEntityMapper` tiene además las sobrecargas `toEntity(Card)` / `toDomain(CardEntity)` que cifran por su cuenta y no se usan.
-3. **Clave de cifrado en docker-compose ignorada.** El compose define `ENCRYPTION_KEY`, pero la propiedad que lee `AesEncryptionService` es `encryption.secret-key` (variable de entorno equivalente: `ENCRYPTION_SECRET_KEY`), así que el contenedor usa la clave por defecto.
-4. **URL de card-data en payment-processing.** Su default es `http://localhost:8080`, mientras que card-data escucha en `8081`.
-5. **El esquema vive en otro repo.** Las migraciones están en `card-management-database` y no se versionan con el código: cualquier cambio en `CardEntity` requiere una migración nueva allá.
-6. **Sin autenticación/autorización** en la API, incluidos los endpoints que modifican datos sensibles.
-7. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay, pero ninguno de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`. `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
-8. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.
+1. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay, pero ninguno de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`. `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
+2. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.
