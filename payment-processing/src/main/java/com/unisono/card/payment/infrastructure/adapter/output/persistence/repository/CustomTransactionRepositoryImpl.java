@@ -24,7 +24,7 @@ public class CustomTransactionRepositoryImpl implements CustomTransactionReposit
     private EntityManager entityManager;
 
     @Override
-    public Map<String, Object> getTransactionStatistics(UUID cardId, LocalDateTime from, LocalDateTime to) {
+    public Map<String, Object> getTransactionStatistics(String cardId, LocalDateTime from, LocalDateTime to) {
         String query = """
             SELECT 
                 COUNT(*) as totalCount,
@@ -58,7 +58,7 @@ public class CustomTransactionRepositoryImpl implements CustomTransactionReposit
     }
 
     @Override
-    public List<TransactionEntity> findSuspiciousTransactions(UUID cardId, int hours, BigDecimal amountThreshold) {
+    public List<TransactionEntity> findSuspiciousTransactions(String cardId, int hours, BigDecimal amountThreshold) {
         LocalDateTime threshold = LocalDateTime.now().minusHours(hours);
 
         String jpql = """
@@ -77,7 +77,7 @@ public class CustomTransactionRepositoryImpl implements CustomTransactionReposit
     }
 
     @Override
-    public List<Map<String, Object>> getDailyTransactionSummary(UUID cardId, LocalDateTime from, LocalDateTime to) {
+    public List<Map<String, Object>> getDailyTransactionSummary(String cardId, LocalDateTime from, LocalDateTime to) {
         String query = """
             SELECT 
                 DATE(transaction_date) as date,
@@ -112,7 +112,7 @@ public class CustomTransactionRepositoryImpl implements CustomTransactionReposit
     }
 
     @Override
-    public List<TransactionEntity> findPotentialDuplicates(UUID cardId, LocalDateTime within) {
+    public List<TransactionEntity> findPotentialDuplicates(String cardId, LocalDateTime within) {
         String jpql = """
             SELECT t1 FROM TransactionEntity t1
             WHERE EXISTS (
@@ -134,7 +134,7 @@ public class CustomTransactionRepositoryImpl implements CustomTransactionReposit
     }
 
     @Override
-    public Map<String, Object> getMerchantTransactionVolume(UUID merchantId, LocalDateTime from, LocalDateTime to) {
+    public Map<String, Object> getMerchantTransactionVolume(String merchantId, LocalDateTime from, LocalDateTime to) {
         String query = """
             SELECT 
                 COUNT(*) as totalTransactions,
@@ -164,8 +164,8 @@ public class CustomTransactionRepositoryImpl implements CustomTransactionReposit
 
     @Override
     public List<TransactionEntity> findByCriteria(
-            UUID cardId,
-            UUID merchantId,
+            String cardId,
+            String merchantId,
             List<TransactionStatus> statuses,
             LocalDateTime fromDate,
             LocalDateTime toDate,

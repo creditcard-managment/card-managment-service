@@ -40,11 +40,11 @@ public class TransactionEntity {
     @Column(name = "transaction_id", nullable = false, updatable = false)
     private UUID transactionId;
 
-    @Column(name = "card_id", nullable = false)
-    private UUID cardId;
+    @Column(name = "card_id", nullable = false, length = 36)
+    private String cardId;
 
-    @Column(name = "merchant_id", nullable = false)
-    private UUID merchantId;
+    @Column(name = "merchant_id", nullable = false, length = 36)
+    private String merchantId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "transaction_type", nullable = false, length = 50)

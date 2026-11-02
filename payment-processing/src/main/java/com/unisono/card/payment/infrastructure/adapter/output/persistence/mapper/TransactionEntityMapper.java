@@ -7,6 +7,7 @@ import com.unisono.card.payment.domain.model.PaymentMethod;
 import com.unisono.card.payment.domain.model.Transaction;
 import com.unisono.card.payment.domain.model.TransactionAmount;
 import com.unisono.card.payment.domain.model.TransactionId;
+import com.unisono.card.payment.domain.model.TransactionStatus;
 import com.unisono.card.payment.domain.model.TransactionType;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.TransactionEntity;
 import com.unisono.card.shared.domain.valueobject.CardId;
@@ -35,21 +36,50 @@ public class TransactionEntityMapper {
             return null;
         }
 
+        CardData cardData = transaction.getCardData();
+        MerchantInfo merchantInfo = transaction.getMerchantInfo();
+        Money amount = transaction.getAmount().getAmount();
+
         return TransactionEntity.builder()
                 .transactionId(transaction.getTransactionId().getValue())
-                .cardId(stringToUuid(transaction.getCardId().getValue())) // ✅ String → UUID
-                .merchantId(extractMerchantId(transaction.getMerchantInfo()))
-                // ... resto del builder
+                .cardId(transaction.getCardId().toString())
+                .merchantId(extractMerchantId(merchantInfo))
+                .transactionType(transaction.getType())
+                .transactionStatus(transaction.getStatus())
+                .paymentMethod(transaction.getPaymentMethod())
+                // Amount
+                .amount(amount.getAmount())
+                .currency(amount.getCurrencyCode())
+                .localAmount(getLocalAmount(transaction))
+                .localCurrency(getLocalCurrency(transaction))
+                .exchangeRate(transaction.getAmount().getExchangeRate())
+                // Card (tokenized)
+                .cardNumberToken(cardData.getCardNumberToken())
+                .cardLastFour(cardData.getLastFourDigits())
+                .cardholderName(cardData.getCardholderName())
+                .expirationDate(cardData.getExpirationDate().toString()) // MM/YYYY
+                // Authorization
+                .authorizationCode(getAuthorizationCode(transaction))
+                .authorizationDate(getAuthorizationDate(transaction))
+                .authorizationResponseCode(getAuthorizationResponseCode(transaction))
+                // Merchant
+                .merchantCategoryCode(merchantInfo.getMerchantCategoryCode())
+                .merchantName(merchantInfo.getMerchantName())
+                .merchantCity(merchantInfo.getCity())
+                .merchantCountry(merchantInfo.getCountry())
+                // Transaction details
+                .terminalId(transaction.getTerminalId())
+                .posEntryMode(transaction.getPosEntryMode())
+                .transactionDate(transaction.getTransactionDate())
+                .settlementDate(transaction.getSettlementDate())
+                // Fraud & status
+                .riskScore(transaction.getRiskScore())
+                .declineReason(transaction.getDeclineReason())
+                .reversalReason(transaction.getStatus() == TransactionStatus.REVERSED
+                        ? transaction.getDeclineReason()
+                        : null)
+                .version(transaction.getVersion())
                 .build();
-    }
-
-    // Helper method
-    private UUID stringToUuid(String value) {
-        try {
-            return UUID.fromString(value);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid UUID format: " + value, e);
-        }
     }
 
 
@@ -65,6 +95,7 @@ public class TransactionEntityMapper {
         // Reconstruct value objects
         TransactionId transactionId = mapToTransactionId(entity.getTransactionId());
         CardId cardId = mapToCardId(entity.getCardId());
+                        //.cardId(transaction.getCardId().toString())
         CardData cardData = mapToCardData(entity);
         MerchantInfo merchantInfo = mapToMerchantInfo(entity);
         TransactionAmount amount = mapToTransactionAmount(entity);
@@ -177,8 +208,8 @@ public class TransactionEntityMapper {
         return TransactionId.of(uuid);
     }
 
-    private CardId mapToCardId(UUID uuid) {
-        return CardId.of(uuid.toString()); // ✅ UUID → String → CardId
+    private CardId mapToCardId(String cardId) {
+        return CardId.of(cardId);
     }
     private CardData mapToCardData(TransactionEntity entity) {
         ExpirationDate expirationDate = ExpirationDate.of(entity.getExpirationDate());
@@ -233,12 +264,8 @@ public class TransactionEntityMapper {
         );
     }
 
-    private UUID extractMerchantId(MerchantInfo merchantInfo) {
-        try {
-            return UUID.fromString(merchantInfo.getMerchantId());
-        } catch (IllegalArgumentException e) {
-            return UUID.nameUUIDFromBytes(merchantInfo.getMerchantId().getBytes());
-        }
+    private String extractMerchantId(MerchantInfo merchantInfo) {
+        return merchantInfo.getMerchantId();
     }
 
     private BigDecimal getLocalAmount(Transaction transaction) {

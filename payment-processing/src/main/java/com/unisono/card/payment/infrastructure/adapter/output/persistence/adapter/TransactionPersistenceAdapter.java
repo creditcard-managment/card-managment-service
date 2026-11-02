@@ -15,7 +15,6 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -34,6 +33,13 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
         log.debug("Saving transaction: {}", transaction.getTransactionId());
 
         TransactionEntity entity = entityMapper.toEntity(transaction);
+
+        // New transactions carry version 0 from the domain; a null version makes
+        // Spring Data persist them instead of merging a row that does not exist yet
+        if (!jpaRepository.existsByTransactionId(entity.getTransactionId())) {
+            entity.setVersion(null);
+        }
+
         TransactionEntity savedEntity = jpaRepository.save(entity);
 
         return entityMapper.toDomain(savedEntity);
@@ -51,9 +57,9 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     public List<Transaction> findByCardId(CardId cardId) {
         log.debug("Finding transactions for card: {}", cardId);
 
-        UUID cardUuid = toUuid(cardId.getValue()); // ✅ String → UUID
+        String cardIdValue = cardId.getValue();
 
-        return jpaRepository.findByCardIdOrderByTransactionDateDesc(cardUuid)
+        return jpaRepository.findByCardIdOrderByTransactionDateDesc(cardIdValue)
                 .stream()
                 .map(entityMapper::toDomain)
                 .collect(Collectors.toList());
@@ -63,10 +69,10 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     public List<Transaction> findByCardIdAndStatus(CardId cardId, TransactionStatus status) {
         log.debug("Finding transactions for card: {} with status: {}", cardId, status);
 
-        UUID cardUuid = toUuid(cardId.getValue()); // ✅ String → UUID
+        String cardIdValue = cardId.getValue();
 
         return jpaRepository.findByCardIdAndTransactionStatusOrderByTransactionDateDesc(
-                        cardUuid,
+                        cardIdValue,
                         status
                 )
                 .stream()
@@ -78,9 +84,9 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     public List<Transaction> findByCardIdAndDateRange(CardId cardId, LocalDateTime from, LocalDateTime to) {
         log.debug("Finding transactions for card: {} between {} and {}", cardId, from, to);
 
-        UUID cardUuid = toUuid(cardId.getValue()); // ✅ String → UUID
+        String cardIdValue = cardId.getValue();
 
-        return jpaRepository.findByCardIdAndDateRange(cardUuid, from, to)
+        return jpaRepository.findByCardIdAndDateRange(cardIdValue, from, to)
                 .stream()
                 .map(entityMapper::toDomain)
                 .collect(Collectors.toList());
@@ -128,19 +134,5 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
         log.debug("Deleting transaction: {}", transactionId);
 
         jpaRepository.deleteById(transactionId.getValue());
-    }
-
-    // ==================== Helper Methods ====================
-
-    /**
-     * Convert String to UUID
-     */
-    private UUID toUuid(String value) {
-        try {
-            return UUID.fromString(value);
-        } catch (IllegalArgumentException e) {
-            log.error("Invalid UUID format: {}", value, e);
-            throw new IllegalArgumentException("Invalid CardId UUID format: " + value, e);
-        }
     }
 }

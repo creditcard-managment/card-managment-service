@@ -21,13 +21,13 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
     /**
      * Find all transactions for a specific card
      */
-    List<TransactionEntity> findByCardIdOrderByTransactionDateDesc(UUID cardId);
+    List<TransactionEntity> findByCardIdOrderByTransactionDateDesc(String cardId);
 
     /**
      * Find transactions by card and status
      */
     List<TransactionEntity> findByCardIdAndTransactionStatusOrderByTransactionDateDesc(
-            UUID cardId,
+            String cardId,
             TransactionStatus status
     );
 
@@ -39,7 +39,7 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
             "AND t.transactionDate BETWEEN :fromDate AND :toDate " +
             "ORDER BY t.transactionDate DESC")
     List<TransactionEntity> findByCardIdAndDateRange(
-            @Param("cardId") UUID cardId,
+            @Param("cardId") String cardId,
             @Param("fromDate") LocalDateTime fromDate,
             @Param("toDate") LocalDateTime toDate
     );
@@ -70,13 +70,13 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
     /**
      * Find transactions by merchant
      */
-    List<TransactionEntity> findByMerchantIdOrderByTransactionDateDesc(UUID merchantId);
+    List<TransactionEntity> findByMerchantIdOrderByTransactionDateDesc(String merchantId);
 
     /**
      * Find transactions by merchant and status
      */
     List<TransactionEntity> findByMerchantIdAndTransactionStatus(
-            UUID merchantId,
+            String merchantId,
             TransactionStatus status
     );
 
@@ -88,7 +88,7 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
     /**
      * Count transactions by card and status
      */
-    Long countByCardIdAndTransactionStatus(UUID cardId, TransactionStatus status);
+    Long countByCardIdAndTransactionStatus(String cardId, TransactionStatus status);
 
     /**
      * Count transactions by card in date range
@@ -97,7 +97,7 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
             "WHERE t.cardId = :cardId " +
             "AND t.transactionDate BETWEEN :fromDate AND :toDate")
     Long countByCardIdAndDateRange(
-            @Param("cardId") UUID cardId,
+            @Param("cardId") String cardId,
             @Param("fromDate") LocalDateTime fromDate,
             @Param("toDate") LocalDateTime toDate
     );
@@ -133,7 +133,7 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
             "ORDER BY t.transactionDate DESC " +
             "LIMIT :limit")
     List<TransactionEntity> findRecentByCardId(
-            @Param("cardId") UUID cardId,
+            @Param("cardId") String cardId,
             @Param("limit") int limit
     );
 
@@ -145,7 +145,7 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
             "AND t.transactionStatus IN :statuses " +
             "ORDER BY t.transactionDate DESC")
     List<TransactionEntity> findByCardIdAndStatusIn(
-            @Param("cardId") UUID cardId,
+            @Param("cardId") String cardId,
             @Param("statuses") List<TransactionStatus> statuses
     );
 
@@ -155,7 +155,7 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
     @Query("SELECT COALESCE(SUM(t.amount), 0) FROM TransactionEntity t " +
             "WHERE t.cardId = :cardId " +
             "AND t.transactionStatus = 'APPROVED'")
-    java.math.BigDecimal sumApprovedAmountByCardId(@Param("cardId") UUID cardId);
+    java.math.BigDecimal sumApprovedAmountByCardId(@Param("cardId") String cardId);
 
     /**
      * Sum of transaction amounts by card in date range
@@ -165,7 +165,7 @@ public interface JpaTransactionRepository extends JpaRepository<TransactionEntit
             "AND t.transactionDate BETWEEN :fromDate AND :toDate " +
             "AND t.transactionStatus IN ('APPROVED', 'SETTLED')")
     java.math.BigDecimal sumAmountByCardIdAndDateRange(
-            @Param("cardId") UUID cardId,
+            @Param("cardId") String cardId,
             @Param("fromDate") LocalDateTime fromDate,
             @Param("toDate") LocalDateTime toDate
     );

@@ -60,7 +60,7 @@ public class CardEntity {
     @Column(name = "holder_birth_date")
     private LocalDate holderBirthDate;
 
-    @Column(name = "holder_address", length = 255)
+    @Column(name = "holder_address", length = 500)
     private String holderAddress;
 
     // =============================================

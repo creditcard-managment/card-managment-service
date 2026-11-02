@@ -45,6 +45,7 @@ public class StateTransitionEntity {
     private LocalDateTime transitionedAt;
 
     @Column(name = "successful", nullable = false)
+    @Builder.Default
     private Boolean successful = true;
 
     @Column(name = "error_message", columnDefinition = "TEXT")

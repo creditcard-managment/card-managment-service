@@ -26,9 +26,9 @@ public class RestTemplateConfig {
                 .setConnectTimeout(Duration.ofSeconds(5))
                 .setReadTimeout(Duration.ofSeconds(10))
                 .requestFactory(() -> {
-                    SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-                    factory.setBufferRequestBody(false);
-                    return new BufferingClientHttpRequestFactory(factory);
+                    return new BufferingClientHttpRequestFactory(
+                            new SimpleClientHttpRequestFactory()
+                    );
                 })
                 .interceptors(loggingInterceptor())
                 .build();

@@ -7,7 +7,6 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * Custom repository interface for complex transaction queries
@@ -17,34 +16,34 @@ public interface CustomTransactionRepository {
     /**
      * Get transaction statistics for a card
      */
-    Map<String, Object> getTransactionStatistics(UUID cardId, LocalDateTime from, LocalDateTime to);
+    Map<String, Object> getTransactionStatistics(String cardId, LocalDateTime from, LocalDateTime to);
 
     /**
      * Find suspicious transactions based on velocity and amount patterns
      */
-    List<TransactionEntity> findSuspiciousTransactions(UUID cardId, int hours, BigDecimal amountThreshold);
+    List<TransactionEntity> findSuspiciousTransactions(String cardId, int hours, BigDecimal amountThreshold);
 
     /**
      * Get daily transaction summary for a card
      */
-    List<Map<String, Object>> getDailyTransactionSummary(UUID cardId, LocalDateTime from, LocalDateTime to);
+    List<Map<String, Object>> getDailyTransactionSummary(String cardId, LocalDateTime from, LocalDateTime to);
 
     /**
      * Find duplicate transactions (same card, merchant, amount within timeframe)
      */
-    List<TransactionEntity> findPotentialDuplicates(UUID cardId, LocalDateTime within);
+    List<TransactionEntity> findPotentialDuplicates(String cardId, LocalDateTime within);
 
     /**
      * Get merchant transaction volume
      */
-    Map<String, Object> getMerchantTransactionVolume(UUID merchantId, LocalDateTime from, LocalDateTime to);
+    Map<String, Object> getMerchantTransactionVolume(String merchantId, LocalDateTime from, LocalDateTime to);
 
     /**
      * Find transactions by multiple criteria (dynamic query)
      */
     List<TransactionEntity> findByCriteria(
-            UUID cardId,
-            UUID merchantId,
+            String cardId,
+            String merchantId,
             List<TransactionStatus> statuses,
             LocalDateTime fromDate,
             LocalDateTime toDate,
