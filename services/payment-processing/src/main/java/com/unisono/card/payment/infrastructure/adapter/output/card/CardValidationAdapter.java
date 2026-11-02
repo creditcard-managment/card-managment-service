@@ -20,7 +20,7 @@ public class CardValidationAdapter implements CardValidationPort {
 
     private final RestTemplate restTemplate;
 
-    @Value("${services.card-data.url:http://localhost:8080}")
+    @Value("${services.card-data.url:http://localhost:8081}")
     private String cardDataServiceUrl;
 
     @Override

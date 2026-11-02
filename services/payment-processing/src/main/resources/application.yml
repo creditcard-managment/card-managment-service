@@ -91,10 +91,10 @@ server:
 # External Services Configuration
 services:
   card-data:
-    url: ${CARD_DATA_SERVICE_URL:http://localhost:8080}
+    url: ${CARD_DATA_SERVICE_URL:http://localhost:8081}
 
   card-limits:
-    url: ${CARD_LIMITS_SERVICE_URL:http://localhost:8080}
+    url: ${CARD_LIMITS_SERVICE_URL:http://localhost:8082}
 
   merchant:
     url: ${MERCHANT_SERVICE_URL:http://localhost:8080}

@@ -76,9 +76,9 @@ logging:
   level:
     root: INFO
     com.unisono.card.data: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
-    org.springframework.jdbc.core: DEBUG
+    # SQL apagado por defecto (ver application.yml). Nunca usar BasicBinder en TRACE:
+    # loguea los valores de los parámetros, incluidos datos sensibles.
+    org.hibernate.SQL: INFO
     com.zaxxer.hikari: INFO
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
