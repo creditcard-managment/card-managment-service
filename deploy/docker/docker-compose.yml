@@ -1,0 +1,210 @@
+version: '3.8'
+
+# =============================================================================
+# Card Management System - Docker Compose
+# =============================================================================
+# Estructura multi-module Maven con parent pom
+#
+# Servicios de infraestructura:
+#   - postgres          → Puerto 5432
+#   - pgadmin           → Puerto 5050
+#   - zookeeper         → Puerto 2181
+#   - kafka             → Puerto 9092 (interno) / 29092 (host)
+#
+# Servicios de aplicación:
+#   - card-data-service       → Puerto 8081
+#   - card-limits-service     → Puerto 8082
+#   - card-lifecycle-service  → Puerto 8083
+#   - payment-processing      → Puerto 8085
+#
+# Módulos que NO son servicios (librerías Maven, sin contenedor propio):
+#   - card-shared             → dependencia interna, se incluye en el build de otros módulos
+#   - card-events             → librería de eventos de dominio (solo POJOs + Jackson)
+# =============================================================================
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: card-management-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    networks:
+      - card-network
+    healthcheck:
+      # La imagen Confluent no tiene nc → usamos zookeeper-shell incluido en la imagen
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/commands/stat || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: card-management-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      # 29092: acceso desde el host (tu IDE, herramientas locales)
+      # 9092:  acceso interno entre contenedores
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      # Retención de logs
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - card-network
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 15s
+      retries: 10
+      start_period: 60s
+
+  # ===========================================================================
+  # SERVICIOS DE APLICACIÓN
+  # Cada servicio buildea su módulo desde la raíz del proyecto Maven.
+  # Asegurate de correr `mvn package -DskipTests` antes de levantar.
+  # ===========================================================================
+
+  card-data-service:
+    build:
+      context: .
+      dockerfile: card-data/Dockerfile
+    container_name: card-data-service
+    environment:
+      SPRING_PROFILES_ACTIVE: card-data
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256Key!!}
+      SERVER_PORT: 8081
+    ports:
+      - "8081:8081"
+    networks:
+      - card-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  card-limits-service:
+    build:
+      context: .
+      dockerfile: card-limits/Dockerfile
+    container_name: card-limits-service
+    environment:
+      SPRING_PROFILES_ACTIVE: card-limits
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256Key!!}
+      SERVER_PORT: 8082
+    ports:
+      - "8082:8082"
+    networks:
+      - card-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8082/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  card-lifecycle-service:
+    build:
+      context: .
+      dockerfile: card-lifecycle/Dockerfile
+    container_name: card-lifecycle-service
+    environment:
+      SPRING_PROFILES_ACTIVE: card-lifecycle
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256Key!!}
+      SERVER_PORT: 8083
+    ports:
+      - "8083:8083"
+    networks:
+      - card-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8083/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  payment-processing:
+    build:
+      context: .
+      dockerfile: payment-processing/Dockerfile
+    container_name: payment-processing-service
+    environment:
+      SPRING_PROFILES_ACTIVE: payment
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      # Sobreescribe el localhost:9092 del yml → apunta al broker interno
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-MySecretKey32BytesForAES256Key!!}
+      SERVER_PORT: 8085
+    ports:
+      - "8085:8085"
+    networks:
+      - card-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8085/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  zookeeper_data:
+    driver: local
+  zookeeper_log:
+    driver: local
+  kafka_data:
+    driver: local
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  card-network:
+    external: true
+    name: card-management-database_card-network

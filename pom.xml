@@ -70,7 +70,6 @@
         <module>card-limits</module>
         <module>card-lifecycle</module>
         <module>payment-processing</module>
-        <module>payment-processing</module>
     </modules>
 
     <!-- DEPENDENCY MANAGEMENT (versiones centralizadas) -->
