@@ -45,10 +45,9 @@ com.unisono.card.data
 │   ├── model          Card (aggregate root), CardHolder, CardType, CardCategory
 │   ├── port.input     Casos de uso (CreateCard, GetCard, BlockCard, UnblockCard,
 │   │                  ValidatePIN, ResetPIN, UpdateCardStatus)
-│   ├── port.output    CardRepository, EncryptionPort
-│   ├── service        CardManagementService, CardSecurityService,
-│   │                  PINManagementService, CardValidationService, CreateCardService
-│   └── event          CardCreatedDomainEvent (evento interno de Spring)
+│   ├── port.output    CardRepository, EncryptionPort, EventOutboxPort
+│   └── service        CardManagementService, CardSecurityService,
+│                      PINManagementService, CardValidationService, CreateCardService
 ├── application
 │   ├── dto            Requests / Responses de la API
 │   └── mapper         CardDtoMapper (DTO ⇄ dominio)
@@ -56,9 +55,11 @@ com.unisono.card.data
     ├── adapter.input.rest           CardController, CardSecurityController,
     │                                PINController, GlobalExceptionHandler
     ├── adapter.output.persistence   CardRepositoryAdapter, JpaCardRepository,
-    │                                CardEntity, CardEntityMapper
+    │                                CardEntity, CardEntityMapper,
+    │                                OutboxEventAdapter, OutboxEventEntity,
+    │                                JpaOutboxEventRepository
     ├── adapter.output.encryption    CardEncryptionAdapter
-    ├── adapter.output.event         CardEventListener, KafkaEventPublisher
+    ├── adapter.output.event         OutboxRelay, OutboxCleaner, KafkaEventPublisher
     └── config                       DataSource (Hikari), Kafka producer,
                                      Use cases, Swagger
 ```
@@ -94,6 +95,7 @@ com.unisono.card.data
 | `cvv` | `CVV` | Se completa en la emisión |
 | `pin` | `PIN` | **Transitorio**, solo en memoria; nunca se persiste en claro |
 | `pinHash` | `String` | Hash BCrypt del PIN (persistido) |
+| `pinFailedAttempts` | `int` | Intentos fallidos de PIN consecutivos (bloqueo automático al llegar a `MAX_PIN_ATTEMPTS` = 3) |
 | `expirationDate` | `ExpirationDate` | Mes/año de vencimiento |
 | `createdAt`, `updatedAt` | `LocalDateTime` | Auditoría |
 | `issuedAt`, `activatedAt`, `blockedAt`, `cancelledAt`, `expiredAt` | `LocalDateTime` | Hitos del ciclo de vida |
@@ -109,11 +111,13 @@ com.unisono.card.data
 | `updateCardData(pan, cvv, pin, exp)` | Carga datos de emisión; setea `issuedAt` |
 | `block(reason)` | Exige `CardStatus.canBlock()` (`ACTIVE` o `ISSUED`); → `BLOCKED`, guarda motivo y `blockedAt` |
 | `blockForFraud(reason)` | Igual que `block`; → `BLOCKED_FRAUD` |
-| `unblock()` | Exige estado bloqueado; → `ACTIVE`, limpia motivo y fecha |
+| `unblock()` | Exige estado bloqueado; → `ACTIVE`, limpia motivo y fecha y reinicia `pinFailedAttempts` |
 | `cancel(reason)` / `expire()` / `delete()` | → `CANCELLED` / `EXPIRED` (validando la transición) / soft delete |
 
 Una transición no permitida lanza `BusinessRuleException` (→ **422**).
-| `updatePIN(hash)` / `resetPIN(hash)` | Reemplaza `pinHash` y limpia el PIN en claro |
+| `updatePIN(hash)` / `resetPIN(hash)` | Reemplaza `pinHash`, limpia el PIN en claro y reinicia `pinFailedAttempts` |
+| `registerFailedPinAttempt()` | Suma un intento; al llegar a 3 bloquea la tarjeta si `canBlock()` (motivo `"Bloqueo automático: 3 intentos fallidos de PIN"`) |
+| `resetPinFailedAttempts()` | Reinicia el contador (PIN correcto) |
 
 **Consultas derivadas**
 
@@ -272,13 +276,18 @@ Reciben DTOs validados con Bean Validation (`UpdateCardStatusRequest`, `UpdateAc
 
 Respuesta **200** `{ "valid": true | false }`. Devuelve `false` también si la tarjeta no tiene PIN configurado. PIN de exactamente 4 dígitos.
 
+- Un PIN incorrecto suma un intento fallido; al tercero consecutivo la tarjeta pasa a `BLOCKED`.
+- Un PIN correcto reinicia el contador.
+- Sobre una tarjeta bloqueada responde **422** `"La tarjeta está bloqueada. Razón: …"`, aunque el PIN sea correcto.
+
 #### `POST /{cardId}/reset-pin`
 
 ```json
 { "oldPin": "1234", "newPin": "5678" }
 ```
 
-- Si la tarjeta tiene PIN, `oldPin` debe coincidir; si no → **422** `"El PIN actual es incorrecto"`.
+- Si la tarjeta tiene PIN, `oldPin` debe coincidir; si no → **422** `"El PIN actual es incorrecto. Intentos restantes: N"`. El intento fallido cuenta igual que en `validate-pin` y se persiste aunque la operación falle (`noRollbackFor`); al tercero, la tarjeta se bloquea.
+- Sobre una tarjeta bloqueada responde **422**.
 - `newPin` se valida con `PIN.of(...)`, se hashea con BCrypt y se guarda.
 - Respuesta **200** `CardResponse`.
 
@@ -325,7 +334,7 @@ sequenceDiagram
     participant S as CardManagementService
     participant R as CardRepositoryAdapter
     participant DB as PostgreSQL
-    participant L as CardEventListener
+    participant O as OutboxRelay
     participant K as Kafka
 
     C->>API: POST /api/v1/cards
@@ -334,14 +343,29 @@ sequenceDiagram
     S->>S: Card.create(...) → REQUESTED
     S->>R: save(card)
     R->>DB: INSERT cards
-    S->>S: publishEvent(CardCreatedDomainEvent)
+    S->>DB: INSERT outbox_events (CardCreatedEvent)
     S-->>API: Card
     API-->>C: 201 CardResponse
-    Note over S,L: COMMIT de la transacción
-    L->>K: card.created (key = cardId)
+    Note over S,DB: Un solo COMMIT: tarjeta y evento
+    loop cada poll-interval-ms
+        O->>DB: SELECT … FOR UPDATE SKIP LOCKED (pendientes)
+        O->>K: card.created (key = cardId), espera ack
+        O->>DB: published_at = now()
+    end
 ```
 
-El evento a Kafka se emite con `@TransactionalEventListener(phase = AFTER_COMMIT)`: **solo se publica si la tarjeta quedó persistida**. Si Kafka falla, el error se loguea y la tarjeta queda creada igual (no hay reintento ni outbox).
+**Transactional outbox:** la tarjeta y el evento se guardan en la misma transacción, así que nunca hay una tarjeta sin evento ni un evento sin tarjeta. `OutboxRelay` publica los pendientes en orden de inserción y espera la confirmación del broker. Ante un error:
+
+| Tipo de error | Ejemplos | Qué hace el relay |
+|---|---|---|
+| **Transitorio** | Broker caído, timeout (`RetriableException` de Kafka) | Registra `attempts`/`last_error`, corta el lote para no publicar fuera de orden y reintenta en la próxima pasada, **sin límite** |
+| **Permanente** | Payload inválido, mensaje demasiado grande, topic inválido | Marca el evento con `failed_at` (no se reintenta) y **sigue con los siguientes** |
+
+- **Si Kafka no responde:** el alta igual devuelve 201; el evento queda pendiente hasta que el broker vuelva.
+- **Eventos fallidos:** quedan en la tabla para revisión. Para reintentar uno: `UPDATE outbox_events SET failed_at = NULL WHERE id = …`.
+- **Orden:** si un evento falla de forma permanente, los eventos posteriores del mismo aggregate se publican igual, aunque ese quede atrás.
+- **Garantía:** la entrega es *at-least-once*. Un evento puede publicarse dos veces, por ejemplo si un envío ya estaba en vuelo cuando el productor lo dio por vencido, o si la instancia cae entre el envío y el commit. Los consumidores deben ser idempotentes; card-lifecycle lo es (§8).
+- **Limpieza:** `OutboxCleaner` borra a diario los eventos publicados con más de `retention-days` (7). Los fallidos se conservan y se avisan por log.
 
 ### 5.2 Emisión y activación (orquestadas por `card-lifecycle`)
 
@@ -355,8 +379,10 @@ El evento a Kafka se emite con `@TransactionalEventListener(phase = AFTER_COMMIT
 
 ### 5.4 PIN
 
-- **Validación**: `BCrypt.verify(pinPlano, pinHash)`. Los intentos fallidos se loguean en `WARN`; no hay contador de intentos ni bloqueo automático.
-- **Cambio**: verifica el PIN actual (si existe), hashea el nuevo y reemplaza `pinHash`.
+- **Validación**: `BCrypt.verify(pinPlano, pinHash)`. Cada fallo suma en `pin_failed_attempts`; al tercero consecutivo la tarjeta se bloquea automáticamente. Un PIN correcto reinicia el contador.
+- **Cambio**: verifica el PIN actual (si existe; un fallo cuenta como intento), hashea el nuevo, reemplaza `pinHash` y reinicia el contador.
+- **Desbloqueo**: `POST /{cardId}/unblock` también reinicia el contador, para que la tarjeta no se vuelva a bloquear con el primer error.
+- Con la tarjeta bloqueada, validar o cambiar el PIN responde **422**.
 
 ---
 
@@ -378,6 +404,7 @@ El evento a Kafka se emite con `@TransactionalEventListener(phase = AFTER_COMMIT
 | `last_four_digits` | `varchar(4)` | sí | En claro, para búsqueda y display; índice `idx_last_four_digits` |
 | `cvv_encrypted` | `text` | sí | CVV cifrado AES |
 | `pin_hash` | `text` | sí | Hash BCrypt |
+| `pin_failed_attempts` | `int` | no | default `0`, `CHECK >= 0` (V9) |
 | `type` / `category` / `status` | `varchar(20)` | no | Enums como `STRING`; índice `idx_status` |
 | `expiration_month` / `expiration_year` | `int` | sí | |
 | `created_at` / `updated_at` | `timestamp` | no | `@CreationTimestamp` / `@UpdateTimestamp` |
@@ -388,7 +415,7 @@ El evento a Kafka se emite con `@TransactionalEventListener(phase = AFTER_COMMIT
 
 Los datos del titular se guardan en la misma tabla (no hay tabla de titulares).
 
-> **Esquema**: lo crea Flyway desde el repo `card-management-database`: `cards` en V1, ajustada por V8 (`INFINITE`, longitudes) y V9 (`pin_failed_attempts`), y `outbox_events` en V9. Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes de levantar el servicio.
+> **Esquema**: lo crea Flyway desde el repo `card-management-database`: `cards` en V1, ajustada por V8 (`INFINITE`, longitudes) y V9 (`pin_failed_attempts`), y `outbox_events` en V9, ajustada por V10 (`failed_at`). Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes de levantar el servicio.
 
 #### 6.1.1 Diferencias entre el esquema y `CardEntity`
 
@@ -415,9 +442,12 @@ Eventos de integración pendientes de publicar (ver §5.1 y §8).
 | `event_type` | `varchar(100)` | no | `CardCreatedEvent`, … |
 | `payload` | `text` | no | JSON del evento; se publica sin modificaciones |
 | `created_at` | `timestamp` | no | |
-| `published_at` | `timestamp` | sí | `null` = pendiente; índice parcial `idx_outbox_events_pending` |
+| `published_at` | `timestamp` | sí | `null` = no publicado; índice parcial para la limpieza |
+| `failed_at` | `timestamp` | sí | Error permanente: no se reintenta (V10) |
 | `attempts` | `int` | no | Envíos intentados (exitoso incluido) |
 | `last_error` | `varchar(1000)` | sí | Último error de publicación |
+
+Un evento está **pendiente** si `published_at` y `failed_at` son nulos; el índice parcial `idx_outbox_events_pending` cubre exactamente esos.
 
 ### 6.3 Soft delete
 
@@ -455,7 +485,7 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 
 | Evento | Topic | Key | Cuándo | Consumidor |
 |---|---|---|---|---|
-| `CardCreatedEvent` | `card.created` | `cardId` | Alta de tarjeta, vía outbox (§5.1) | `card-lifecycle` (`CardEventConsumer`) |
+| `CardCreatedEvent` | `card.created` | `cardId` | Alta de tarjeta, vía outbox (§5.1) | `card-lifecycle` (`CardEventConsumer`, idempotente: una sola transición `CREATE` por tarjeta) |
 
 Payload (JSON, sin headers de tipo):
 
@@ -481,7 +511,7 @@ Payload (JSON, sin headers de tipo):
 **`OutboxRelay`:**
 - Lee lotes de pendientes con `FOR UPDATE SKIP LOCKED`, lo que permite varias instancias.
 - Publica el JSON almacenado tal cual y espera el ack del broker.
-- Ante un error registra `attempts` y `last_error` y corta el lote, para no publicar fuera de orden.
+- Ante un error transitorio registra `attempts` y `last_error` y corta el lote, para no publicar fuera de orden; ante uno permanente marca `failed_at` y sigue (§5.1).
 
 `KafkaEventPublisher` solo lo usa `CreateCardService`, que no está en uso (§10).
 
@@ -506,6 +536,8 @@ Las clases `CardBlockedEvent`, `CardUnblockedEvent` y `PINResetEvent` existen va
 | `card.data.outbox.poll-interval-ms` | `1000` (frecuencia del relay) |
 | `card.data.outbox.batch-size` | `50` (eventos por pasada) |
 | `card.data.outbox.send-timeout-ms` | `15000` (debe superar `delivery.timeout.ms` + `max.block.ms`) |
+| `card.data.outbox.retention-days` | `7` (días que se conservan los eventos publicados) |
+| `card.data.outbox.cleanup-cron` | `0 0 3 * * *` (limpieza diaria) |
 | `management.endpoints.web.exposure.include` | `health,info,metrics` |
 
 El perfil `card-data` (`application-card-data.yml`) agrega logging a archivo (`logs/card-data.log`), métricas Prometheus y la configuración de SpringDoc. Es el perfil que activa `docker-compose`.
@@ -531,14 +563,11 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-data-service
 
 Comportamientos actuales del código que conviene tener presentes:
 
-1. **Consumidores sin deduplicación.** El outbox entrega *at-least-once*: si la instancia cae entre el envío y el commit, el evento se vuelve a publicar con el mismo `eventId`. `card-lifecycle` no deduplica, así que registraría dos veces la transición `CREATE` ([EVENTS.md](EVENTS.md)).
-2. **El outbox no se purga.** Los eventos publicados quedan en `outbox_events` indefinidamente; falta un job de limpieza (por ejemplo, borrar los publicados hace más de N días).
-3. **Un evento que siempre falla frena a los siguientes.** El relay corta el lote ante el primer error para mantener el orden, pero no hay límite de intentos ni DLQ: un evento que nunca se puede publicar bloquea la cola. `attempts` y `last_error` permiten detectarlo.
-4. **Logs de SQL del relay.** Con `org.hibernate.SQL` en `DEBUG` (configuración actual), el relay loguea su consulta cada segundo aunque no haya eventos.
-5. **Código duplicado o sin uso:** `CreateCardService` (camino alternativo de alta que publica directo a Kafka sin pasar por el outbox; no lo usa ningún controller), `CardHolderEmbeddable` (con longitudes distintas a `CardEntity`), `CardHolderEntity`, `CardJpaConfig`, `application/config/CardUseCaseConfig` y las excepciones de `domain/exception` (clases vacías). `CardEntityMapper` tiene además las sobrecargas `toEntity(Card)` / `toDomain(CardEntity)` que cifran por su cuenta y no se usan.
-6. **Clave de cifrado en docker-compose ignorada.** El compose define `ENCRYPTION_KEY`, pero la propiedad que lee `AesEncryptionService` es `encryption.secret-key` (variable de entorno equivalente: `ENCRYPTION_SECRET_KEY`), así que el contenedor usa la clave por defecto.
-7. **URL de card-data en payment-processing.** Su default es `http://localhost:8080`, mientras que card-data escucha en `8081`.
-8. **El esquema vive en otro repo.** Las migraciones están en `card-management-database` y no se versionan con el código: cualquier cambio en `CardEntity` requiere una migración nueva allá.
-9. **Sin autenticación/autorización** en la API, incluidos los endpoints que modifican datos sensibles.
-10. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay, pero ninguno de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`. `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
-11. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.
+1. **Logs de SQL del relay.** Con `org.hibernate.SQL` en `DEBUG` (configuración actual), el relay loguea su consulta cada segundo aunque no haya eventos.
+2. **Código duplicado o sin uso:** `CreateCardService` (camino alternativo de alta que publica directo a Kafka sin pasar por el outbox; no lo usa ningún controller), `CardHolderEmbeddable` (con longitudes distintas a `CardEntity`), `CardHolderEntity`, `CardJpaConfig`, `application/config/CardUseCaseConfig` y las excepciones de `domain/exception` (clases vacías). `CardEntityMapper` tiene además las sobrecargas `toEntity(Card)` / `toDomain(CardEntity)` que cifran por su cuenta y no se usan.
+3. **Clave de cifrado en docker-compose ignorada.** El compose define `ENCRYPTION_KEY`, pero la propiedad que lee `AesEncryptionService` es `encryption.secret-key` (variable de entorno equivalente: `ENCRYPTION_SECRET_KEY`), así que el contenedor usa la clave por defecto.
+4. **URL de card-data en payment-processing.** Su default es `http://localhost:8080`, mientras que card-data escucha en `8081`.
+5. **El esquema vive en otro repo.** Las migraciones están en `card-management-database` y no se versionan con el código: cualquier cambio en `CardEntity` requiere una migración nueva allá.
+6. **Sin autenticación/autorización** en la API, incluidos los endpoints que modifican datos sensibles.
+7. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay, pero ninguno de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`. `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
+8. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.

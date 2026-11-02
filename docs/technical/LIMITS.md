@@ -473,7 +473,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 
 11. **Configuración ignorada:** `credit-limits.*` del perfil y las propiedades MySQL del DataSource.
 12. **Archivos vacíos:** `domain/event/*` (3), `domain/exception/*` (3), `application/config/CreditLimitUseCaseConfig` y `infrastructure/config/CreditLimitJpaConfig` tienen 0 bytes.
-13. **DTO ajeno:** `infrastructure/adapter/input/rest/dto/LifecycleHistoryResponse.java` es una copia del DTO de `card-lifecycle`, con el package de `card-lifecycle`.
+13. **DTO ajeno:** `infrastructure/adapter/input/rest/dto/LifecycleHistoryResponse.java` es una copia del DTO de `card-lifecycle` que no se usa.
 14. **Dos endpoints de asignación** (`POST /` y `POST /cards/{cardId}`) con reglas distintas para el `cardId`.
 15. **`CreditLimitManagementService` se declara dos veces:** con `@Service` y como `@Bean` en `CreditLimitUseCaseConfig`. Lo mismo pasa con `CreditValidationService`.
 16. **Sin eventos:** no publica `credit-limit.assigned`, `credit-limit.consumed`, etc., aunque los topics existen en `card-events` ([EVENTS.md §3](EVENTS.md)).

@@ -10,6 +10,9 @@ import java.time.LocalDateTime;
  *
  * Eventos pendientes de publicar en Kafka. Se escriben en la misma transacción
  * que el cambio del aggregate y los publica OutboxRelay.
+ *
+ * Estados: pendiente (published_at y failed_at nulos), publicado (published_at)
+ * o fallido por un error permanente (failed_at; queda para revisión manual).
  */
 @Entity
 @Table(name = "outbox_events")
@@ -47,6 +50,9 @@ public class OutboxEventEntity {
     @Column(name = "published_at")
     private LocalDateTime publishedAt;
 
+    @Column(name = "failed_at")
+    private LocalDateTime failedAt;
+
     @Column(name = "attempts", nullable = false)
     @Builder.Default
     private Integer attempts = 0;
@@ -60,9 +66,25 @@ public class OutboxEventEntity {
         this.lastError = null;
     }
 
+    /**
+     * Error transitorio (p. ej. broker caído): el evento sigue pendiente y se reintenta
+     */
     public void markFailed(String error) {
         this.attempts++;
-        this.lastError = error != null && error.length() > MAX_ERROR_LENGTH
+        this.lastError = truncate(error);
+    }
+
+    /**
+     * Error permanente: el evento deja de reintentarse y queda para revisión manual
+     */
+    public void markDead(String error) {
+        this.attempts++;
+        this.failedAt = LocalDateTime.now();
+        this.lastError = truncate(error);
+    }
+
+    private static String truncate(String error) {
+        return error != null && error.length() > MAX_ERROR_LENGTH
                 ? error.substring(0, MAX_ERROR_LENGTH)
                 : error;
     }

@@ -7,6 +7,7 @@ import com.unisono.card.lifecycle.infrastructure.adapter.output.persistence.enti
 import com.unisono.card.lifecycle.infrastructure.adapter.output.persistence.repository.JpaStateTransitionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.kafka.support.KafkaHeaders;
@@ -16,11 +17,17 @@ import org.springframework.stereotype.Component;
 
 /**
  * Consumer de eventos de Kafka para card-lifecycle
+ *
+ * Idempotente: card-data publica con un outbox at-least-once, así que el mismo
+ * card.created puede llegar más de una vez. Cada tarjeta tiene una sola transición
+ * CREATE; si ya existe, el mensaje se confirma sin registrarla de nuevo.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class CardEventConsumer {
+
+    private static final String CREATE_EVENT = "CREATE";
 
     private final JpaStateTransitionRepository stateTransitionRepository;
     private final ObjectMapper kafkaObjectMapper; // ✅ Inyectar ObjectMapper
@@ -58,7 +65,7 @@ public class CardEventConsumer {
             log.info("📥 Type: {}", event.getCardType());
             log.info("📥 Category: {}", event.getCardCategory());
 
-            // Registrar transición de estado CREATE
+            // Registrar transición de estado CREATE (ignora duplicados)
             registerCreateTransition(event);
 
             // Confirmar procesamiento
@@ -79,22 +86,36 @@ public class CardEventConsumer {
      * Registra la transición de estado CREATE en state_transitions
      */
     private void registerCreateTransition(CardCreatedEvent event) {
+        if (stateTransitionRepository.existsByCardIdAndEvent(event.getCardId(), CREATE_EVENT)) {
+            log.info("🔁 Duplicate CardCreatedEvent {} for card {}: CREATE already registered, skipping",
+                    event.getEventId(), event.getCardId());
+            return;
+        }
+
         log.info("💾 Registering CREATE transition for card: {}", event.getCardId());
 
         StateTransitionEntity transition = StateTransitionEntity.builder()
                 .cardId(event.getCardId())
                 .fromState(null)
                 .toState("REQUESTED")
-                .event("CREATE")
+                .event(CREATE_EVENT)
                 .reason("Solicitud inicial de tarjeta")
                 .performedBy(event.getCreatedBy())
                 .transitionedAt(event.getOccurredOn())
                 .successful(true)
                 .errorMessage(null)
-                .metadata(null)
+                .metadata("{\"eventId\":\"" + event.getEventId() + "\"}")
                 .build();
 
-        StateTransitionEntity saved = stateTransitionRepository.save(transition);
+        StateTransitionEntity saved;
+        try {
+            saved = stateTransitionRepository.saveAndFlush(transition);
+        } catch (DataIntegrityViolationException e) {
+            // Otro consumo del mismo evento lo registró en paralelo (índice único uq_state_transitions_create)
+            log.info("🔁 Duplicate CardCreatedEvent {} for card {}: CREATE registered concurrently, skipping",
+                    event.getEventId(), event.getCardId());
+            return;
+        }
 
         log.info("💾 ✅ CREATE transition saved with ID: {}", saved.getId());
         log.info("💾 Card ID: {}", saved.getCardId());
