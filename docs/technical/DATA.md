@@ -73,9 +73,8 @@ com.unisono.card.data
 | `UnblockCardUseCase` | `CardSecurityService` | `POST /{cardId}/unblock` |
 | `ValidatePINUseCase` | `PINManagementService` | `POST /{cardId}/validate-pin` |
 | `ResetPINUseCase` | `PINManagementService` | `POST /{cardId}/reset-pin` |
-| *(métodos directos, sin port)* | `CardManagementService` | `PUT /{cardId}/status`, `PUT /{cardId}/activated-at`, `PUT /{cardId}/card-data` |
-
-> `UpdateCardStatusUseCase` está declarado pero no tiene implementación; la actualización de estado se hace con `CardManagementService.updateStatus(...)`.
+| `UpdateCardStatusUseCase` | `CardManagementService` | `PUT /{cardId}/status` |
+| *(métodos directos, sin port)* | `CardManagementService` | `PUT /{cardId}/activated-at`, `PUT /{cardId}/card-data` |
 
 ---
 
@@ -106,12 +105,14 @@ com.unisono.card.data
 | Método | Efecto |
 |---|---|
 | `create(clientId, holder, type, category)` | Valida no-nulos; nueva tarjeta en `REQUESTED` |
-| `updateStatus(status)` | Asigna el estado (sin validar transición) |
+| `updateStatus(status)` | Valida la transición con `CardStatus.canTransitionTo` y asigna el estado |
 | `updateCardData(pan, cvv, pin, exp)` | Carga datos de emisión; setea `issuedAt` |
-| `block(reason)` | → `BLOCKED`, guarda motivo y `blockedAt` |
-| `blockForFraud(reason)` | → `BLOCKED_FRAUD`, guarda motivo y `blockedAt` |
+| `block(reason)` | Exige `CardStatus.canBlock()` (`ACTIVE` o `ISSUED`); → `BLOCKED`, guarda motivo y `blockedAt` |
+| `blockForFraud(reason)` | Igual que `block`; → `BLOCKED_FRAUD` |
 | `unblock()` | Exige estado bloqueado; → `ACTIVE`, limpia motivo y fecha |
-| `cancel(reason)` / `expire()` / `delete()` | → `CANCELLED` / `EXPIRED` / soft delete |
+| `cancel(reason)` / `expire()` / `delete()` | → `CANCELLED` / `EXPIRED` (validando la transición) / soft delete |
+
+Una transición no permitida lanza `BusinessRuleException` (→ **422**).
 | `updatePIN(hash)` / `resetPIN(hash)` | Reemplaza `pinHash` y limpia el PIN en claro |
 
 **Consultas derivadas**
@@ -178,7 +179,18 @@ stateDiagram-v2
     EXPIRED --> [*]
 ```
 
-El detalle de las transiciones y quién las orquesta está en [LIFECYCLE.md](LIFECYCLE.md). En `card-data` las transiciones **no se validan** (ver §10).
+El detalle de las transiciones y quién las orquesta está en [LIFECYCLE.md](LIFECYCLE.md). `card-data` valida las transiciones con `CardStatus.canTransitionTo` (card-shared):
+
+| Desde | Hacia |
+|---|---|
+| `REQUESTED` | `APPROVED`, `REJECTED` |
+| `APPROVED` | `ISSUED`, `CANCELLED` |
+| `ISSUED` | `ACTIVE`, `BLOCKED`, `BLOCKED_FRAUD`, `CANCELLED` |
+| `ACTIVE` | `BLOCKED`, `BLOCKED_FRAUD`, `EXPIRED`, `CANCELLED` |
+| `BLOCKED`, `BLOCKED_FRAUD` | `ACTIVE`, `CANCELLED` |
+| `REJECTED`, `CANCELLED`, `EXPIRED` | — (finales) |
+
+El bloqueo desde `ISSUED` sigue a `CardStatus.canBlock()`; la state machine de card-lifecycle solo lo prevé desde `ACTIVE`.
 
 ---
 
@@ -234,13 +246,13 @@ Busca por últimos 4 dígitos **acotado al cliente**. Respuesta **200** → `Car
 
 #### Endpoints internos (consumidos por `card-lifecycle`)
 
-No tienen DTO ni Bean Validation; reciben un `Map` y responden **200** sin cuerpo.
+Reciben DTOs validados con Bean Validation (`UpdateCardStatusRequest`, `UpdateActivatedAtRequest`, `UpdateCardDataRequest`) y responden **200** sin cuerpo. Errores: **400** si falta un campo o tiene formato inválido (incluido un estado inexistente o una fecha mal formada), **404** si la tarjeta no existe y **422** si la transición de estado no está permitida.
 
 | Método y ruta | Body | Efecto |
 |---|---|---|
-| `PUT /{cardId}/status` | `{ "status": "APPROVED" }` | Cambia el estado |
+| `PUT /{cardId}/status` | `{ "status": "APPROVED", "reason": "…" }` (`reason` opcional, máx. 500) | Cambia el estado validando la transición |
 | `PUT /{cardId}/activated-at` | `{ "activatedAt": "2026-11-02T10:15:30" }` | Fecha de activación (ISO-8601) |
-| `PUT /{cardId}/card-data` | `{ "cardNumber": "...", "cvv": "...", "pin": "...", "expirationMonth": 12, "expirationYear": 2030 }` | Carga datos de emisión; el PAN y el CVV se cifran y el PIN se hashea al persistir |
+| `PUT /{cardId}/card-data` | `{ "cardNumber": "...", "cvv": "...", "pin": "...", "expirationMonth": 12, "expirationYear": 2030 }` | Carga datos de emisión; el PAN y el CVV se cifran y el PIN se hashea al persistir. PAN de 13–19 dígitos (+ Luhn), CVV de 3–4, PIN de 4, mes 1–12; el vencimiento no puede estar en el pasado ni a más de 10 años |
 
 ### 4.2 Seguridad (`CardSecurityController`)
 
@@ -248,7 +260,7 @@ No tienen DTO ni Bean Validation; reciben un `Map` y responden **200** sin cuerp
 |---|---|---|
 | `POST /{cardId}/block` | `{ "reason": "Tarjeta perdida" }` (obligatorio) | → `BLOCKED`, **200** `CardResponse` |
 | `POST /{cardId}/block-fraud` | `{ "reason": "..." }` (obligatorio) | → `BLOCKED_FRAUD`, **200** `CardResponse` |
-| `POST /{cardId}/unblock` | — | → `ACTIVE`, **200** `CardResponse`. Si no estaba bloqueada → `IllegalStateException` (**500**, ver §10) |
+| `POST /{cardId}/unblock` | — | → `ACTIVE`, **200** `CardResponse`. Si no estaba bloqueada → **422** |
 
 ### 4.3 PIN (`PINController`)
 
@@ -295,6 +307,8 @@ Ninguna respuesta expone el PAN completo, el CVV ni el hash del PIN.
 | `NotFoundException` | 404 | `Not Found` |
 | `ValidationException` (dominio / Value Objects) | 400 | `Validation Error` |
 | `MethodArgumentNotValidException` (Bean Validation) | 400 | `Validation Error` + `fieldErrors` |
+| `InvalidValueObjectException` | 400 | `Validation Error` |
+| `HttpMessageNotReadableException` (JSON mal formado, enum inexistente, fecha inválida) | 400 | `Validation Error` |
 | `BusinessRuleException` | 422 | `Business Rule Violation` |
 | Cualquier otra | 500 | `Internal Server Error` |
 
@@ -491,13 +505,13 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-data-service
 
 Comportamientos actuales del código que conviene tener presentes:
 
-1. **Transiciones de estado sin validar.** `PUT /status` acepta cualquier `CardStatus`, y `block`/`blockForFraud` no consultan `CardStatus.canBlock()`: se puede bloquear una tarjeta `REQUESTED` o `CANCELLED`. Un valor de estado inexistente produce `IllegalArgumentException` → **500**.
-2. **`unblock` sobre una tarjeta no bloqueada** lanza `IllegalStateException`, que el handler mapea a **500** en lugar de 422.
-3. **Endpoints internos con `Map`** (`/status`, `/activated-at`, `/card-data`): sin Bean Validation, sin documentación OpenAPI de payload, y con casteos directos (`(Integer)`), por lo que un tipo inesperado termina en 500.
+1. ~~**Transiciones de estado sin validar.**~~ *Resuelto:* `CardStatus.canTransitionTo` define las transiciones (§3.5); `updateStatus`, `cancel` y `expire` las validan, y `block`/`blockForFraud` exigen `canBlock()`. Una transición inválida responde **422** y un estado inexistente, **400**.
+2. ~~**`unblock` sobre una tarjeta no bloqueada daba 500.**~~ *Resuelto:* lanza `BusinessRuleException` → **422**.
+3. ~~**Endpoints internos con `Map`.**~~ *Resuelto:* `/status`, `/activated-at` y `/card-data` reciben DTOs con Bean Validation y están documentados en OpenAPI. `PUT /status` usa `UpdateCardStatusUseCase`; los tres responden **404** si la tarjeta no existe (antes, 500).
 4. **Longitud de PIN inconsistente.** `ValidatePINRequest` y `ResetPINRequest` exigen 4 dígitos; `ActivateCardRequest` (sin uso) admite 4–6.
 5. **Sin control de intentos de PIN** ni bloqueo automático tras fallos.
 6. **Publicación a Kafka sin garantía.** Si falla tras el commit, el evento se pierde (no hay patrón outbox); `card-lifecycle` no se entera del alta.
-7. **Código duplicado o sin uso:** `CreateCardService` (camino alternativo de alta que publica directo a Kafka, no lo usa ningún controller), `CardHolderEmbeddable` (con longitudes distintas a `CardEntity`), `CardHolderEntity`, `CardJpaConfig`, `application/config/CardUseCaseConfig`, `UpdateCardStatusRequest`, `UpdateCardStatusUseCase` y las excepciones de `domain/exception` (clases vacías). `CardEntityMapper` tiene además las sobrecargas `toEntity(Card)` / `toDomain(CardEntity)` que cifran por su cuenta y no se usan.
+7. **Código duplicado o sin uso:** `CreateCardService` (camino alternativo de alta que publica directo a Kafka, no lo usa ningún controller), `CardHolderEmbeddable` (con longitudes distintas a `CardEntity`), `CardHolderEntity`, `CardJpaConfig`, `application/config/CardUseCaseConfig` y las excepciones de `domain/exception` (clases vacías). `CardEntityMapper` tiene además las sobrecargas `toEntity(Card)` / `toDomain(CardEntity)` que cifran por su cuenta y no se usan.
 8. **Clave de cifrado en docker-compose ignorada.** El compose define `ENCRYPTION_KEY`, pero la propiedad que lee `AesEncryptionService` es `encryption.secret-key` (variable de entorno equivalente: `ENCRYPTION_SECRET_KEY`), así que el contenedor usa la clave por defecto.
 9. **URL de card-data en payment-processing.** Su default es `http://localhost:8080`, mientras que card-data escucha en `8081`.
 10. **El esquema vive en otro repo.** Las migraciones están en `card-management-database` y no se versionan con el código: cualquier cambio en `CardEntity` requiere una migración nueva allá. Las diferencias que provocaban errores (`INFINITE`, longitudes de `holder_address` y `block_reason`) se corrigen con la V8 (§6.1.1).

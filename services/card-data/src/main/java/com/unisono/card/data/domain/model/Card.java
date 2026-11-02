@@ -1,5 +1,6 @@
 package com.unisono.card.data.domain.model;
 
+import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.valueobject.*;
 import lombok.*;
 
@@ -152,6 +153,7 @@ public class Card {
         if (newStatus == null) {
             throw new IllegalArgumentException("El nuevo estado no puede ser null");
         }
+        validateTransitionTo(newStatus);
         this.status = newStatus;
         this.updatedAt = LocalDateTime.now();
     }
@@ -181,6 +183,7 @@ public class Card {
     }
 
     public void block(String reason) {
+        validateCanBlock();
         this.status = CardStatus.BLOCKED;
         this.blockReason = reason;
         this.blockedAt = LocalDateTime.now();
@@ -188,6 +191,7 @@ public class Card {
     }
 
     public void blockForFraud(String reason) {
+        validateCanBlock();
         this.status = CardStatus.BLOCKED_FRAUD;
         this.blockReason = reason;
         this.blockedAt = LocalDateTime.now();
@@ -195,8 +199,10 @@ public class Card {
     }
 
     public void unblock() {
-        if (!this.status.isBlocked()) { // ✅ Usar método del enum
-            throw new IllegalStateException("La tarjeta no está bloqueada");
+        if (!this.status.isBlocked()) {
+            throw new BusinessRuleException(
+                    String.format("La tarjeta no está bloqueada. Estado actual: %s", this.status)
+            );
         }
         this.status = CardStatus.ACTIVE;
         this.blockReason = null;
@@ -205,6 +211,7 @@ public class Card {
     }
 
     public void cancel(String reason) {
+        validateTransitionTo(CardStatus.CANCELLED);
         this.status = CardStatus.CANCELLED;
         this.cancelledReason = reason;
         this.cancelledAt = LocalDateTime.now();
@@ -212,9 +219,26 @@ public class Card {
     }
 
     public void expire() {
+        validateTransitionTo(CardStatus.EXPIRED);
         this.status = CardStatus.EXPIRED;
         this.expiredAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
+    }
+
+    private void validateTransitionTo(CardStatus target) {
+        if (!this.status.canTransitionTo(target)) {
+            throw new BusinessRuleException(
+                    String.format("Transición de estado inválida: %s → %s", this.status, target)
+            );
+        }
+    }
+
+    private void validateCanBlock() {
+        if (!this.status.canBlock()) {
+            throw new BusinessRuleException(
+                    String.format("No se puede bloquear una tarjeta en estado %s", this.status)
+            );
+        }
     }
 
     public void delete() {
