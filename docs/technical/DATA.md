@@ -475,8 +475,11 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 | CVV | Cifrado AES | `CardRepositoryAdapter` |
 | PIN | Hash BCrypt (`BCryptHashingService`); el PIN en claro solo vive en memoria y está excluido de `toString()` | `CardEntityMapper` / `PINManagementService` |
 
-- La clave AES se lee de `encryption.secret-key`, que toma la variable de entorno `ENCRYPTION_KEY` (la que define docker-compose). Por defecto es un valor de desarrollo de 32 caracteres; **debe definirse en producción**. Si la clave no tiene exactamente 32 bytes, el servicio no arranca.
-- Cambiar la clave deja ilegibles los PAN y CVV ya cifrados: leer una tarjeta cifrada con otra clave responde 500. No hay rotación de claves.
+- **Llavero de claves versionadas** (ver `SHARED.md` §4.1). El PAN y el CVV se guardan como `k1:<Base64>`, donde el prefijo indica con qué clave se cifró.
+  - Variables: `ENCRYPTION_ACTIVE_KEY_ID` (por defecto `k1`) y `ENCRYPTION_KEY_K1` (Base64 de 32 bytes, `openssl rand -base64 32`). Los defaults son de desarrollo; **deben definirse en producción**.
+  - Si la configuración es inválida (falta la clave activa, la clave no es Base64 o no mide 32 bytes), el servicio no arranca.
+- **Rotación:** agregar `encryption.keys.k2`, apuntar `active-key-id` a `k2` y conservar `k1` para leer lo ya guardado. Cada vez que se guarda una tarjeta, su PAN y su CVV se vuelven a cifrar con la clave activa.
+- **Datos anteriores al llavero** (sin prefijo): se descifran con `encryption.legacy-secret-key` (`ENCRYPTION_KEY`, la clave de 32 caracteres de antes) y pasan a la clave activa al volver a guardarse.
 - Las respuestas REST solo devuelven el número enmascarado.
 - Los endpoints no tienen autenticación ni autorización (no hay Spring Security en el módulo).
 
@@ -532,7 +535,9 @@ Hoy **no se publican eventos** de bloqueo, desbloqueo ni cambio de PIN, aunque `
 | `spring.jpa.hibernate.ddl-auto` | `validate` |
 | `spring.flyway.enabled` | `false` |
 | `spring.kafka.bootstrap-servers` | `localhost:9092` |
-| `encryption.secret-key` | `${ENCRYPTION_KEY}`, por defecto una clave de desarrollo (32 caracteres) |
+| `encryption.active-key-id` | `${ENCRYPTION_ACTIVE_KEY_ID:k1}` |
+| `encryption.keys.k1` | `${ENCRYPTION_KEY_K1}`, por defecto una clave de desarrollo (Base64 de 32 bytes) |
+| `encryption.legacy-secret-key` | `${ENCRYPTION_KEY}`, clave anterior (32 caracteres), solo para leer datos sin prefijo |
 | `card.data.outbox.poll-interval-ms` | `1000` (frecuencia del relay) |
 | `card.data.outbox.batch-size` | `50` (eventos por pasada) |
 | `card.data.outbox.send-timeout-ms` | `15000` (debe superar `delivery.timeout.ms` + `max.block.ms`) |
