@@ -388,29 +388,42 @@ El evento a Kafka se emite con `@TransactionalEventListener(phase = AFTER_COMMIT
 
 Los datos del titular se guardan en la misma tabla (no hay tabla de titulares).
 
-> **Esquema**: lo crea Flyway desde el repo `card-management-database` (`migrations/V1__create_cards_tables.sql`, ajustada por `V8__align_cards_with_card_entity.sql`). Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que la tabla debe existir antes de levantar el servicio. La tabla de arriba describe `CardEntity`; la migración agrega restricciones propias (§6.1.1).
+> **Esquema**: lo crea Flyway desde el repo `card-management-database`: `cards` en V1, ajustada por V8 (`INFINITE`, longitudes) y V9 (`pin_failed_attempts`), y `outbox_events` en V9. Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes de levantar el servicio.
 
 #### 6.1.1 Diferencias entre el esquema y `CardEntity`
 
-La migración **V8** corrige las tres primeras filas (las marcadas *Resuelto*); su rollback está en `rollback/R2__rollback_v8.sql`.
+Diferencias de declaración sin efecto práctico:
 
-| Columna | Migración V1 | `CardEntity` / API | Efecto |
+| Columna | Migración | `CardEntity` | Por qué no impacta |
 |---|---|---|---|
-| `category` | V1: `CHECK` sin `INFINITE` | El enum incluye `INFINITE` | *Resuelto en V8:* el `CHECK` incluye `INFINITE` |
-| `holder_address` | V1: `varchar(200)` | `length 500`; el request acepta hasta 500 | *Resuelto en V8:* `varchar(500)` |
-| `block_reason` | V1: `varchar(200)` | `length 500` | *Resuelto en V8:* `varchar(500)` |
-| `client_id` | `varchar(11)` | `length 20` | Sin impacto (el dominio limita a 7–11) |
-| `holder_birth_date` | `NOT NULL` | Nullable | Sin impacto (el dominio la exige) |
-| `pin_hash` | `varchar(100)` | `TEXT` | Sin impacto (un hash BCrypt tiene 60 caracteres) |
-| `status`, `type` | `CHECK` con los valores de los enums | — | Coinciden |
+| `client_id` | `varchar(11)` | `length 20` | El dominio limita a 7–11 dígitos |
+| `holder_birth_date` | `NOT NULL` | Nullable | El dominio la exige |
+| `pin_hash` | `varchar(100)` | `TEXT` | Un hash BCrypt tiene 60 caracteres |
 
-La migración también define índices parciales sobre `deleted = false` y la tabla `card_audit` (V3), que ningún módulo usa.
+La migración también define `CHECK` para `status`, `type` y `category` (coinciden con los enums), índices parciales sobre `deleted = false` y la tabla `card_audit` (V3), que ningún módulo usa.
 
-### 6.2 Soft delete
+### 6.2 Tabla `outbox_events`
+
+Eventos de integración pendientes de publicar (ver §5.1 y §8).
+
+| Columna | Tipo | Nulo | Notas |
+|---|---|---|---|
+| `id` | `bigserial` | no | PK; define el orden de publicación |
+| `event_id` | `varchar(36)` | no | `UNIQUE`; el `eventId` del `DomainEvent` |
+| `aggregate_id` | `varchar(36)` | no | Key del mensaje en Kafka (`cardId`) |
+| `topic` | `varchar(100)` | no | Topic destino |
+| `event_type` | `varchar(100)` | no | `CardCreatedEvent`, … |
+| `payload` | `text` | no | JSON del evento; se publica sin modificaciones |
+| `created_at` | `timestamp` | no | |
+| `published_at` | `timestamp` | sí | `null` = pendiente; índice parcial `idx_outbox_events_pending` |
+| `attempts` | `int` | no | Envíos intentados (exitoso incluido) |
+| `last_error` | `varchar(1000)` | sí | Último error de publicación |
+
+### 6.3 Soft delete
 
 Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) filtran `deleted = false`. `CardRepository.delete(...)` marca `deleted = true` y `deleted_at`; no hay borrado físico.
 
-### 6.3 Consultas disponibles
+### 6.4 Consultas disponibles
 
 | Método | Uso |
 |---|---|
@@ -442,7 +455,7 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 
 | Evento | Topic | Key | Cuándo | Consumidor |
 |---|---|---|---|---|
-| `CardCreatedEvent` | `card.created` | `cardId` | Tras el commit del alta | `card-lifecycle` (`CardEventConsumer`) |
+| `CardCreatedEvent` | `card.created` | `cardId` | Alta de tarjeta, vía outbox (§5.1) | `card-lifecycle` (`CardEventConsumer`) |
 
 Payload (JSON, sin headers de tipo):
 
@@ -460,7 +473,17 @@ Payload (JSON, sin headers de tipo):
 }
 ```
 
-Productor (`KafkaProducerConfig`): `acks=all`, `retries=3`, idempotencia habilitada, `max.in.flight=5`, compresión `snappy`, `linger.ms=10`, `batch.size=16384`. `KafkaEventPublisher` ofrece `publish` (asíncrono, solo loguea el resultado) y `publishSync` (espera confirmación y lanza `EventPublishingException`).
+**Productor (`KafkaProducerConfig`):**
+- `acks=all`, `retries=3`, idempotencia habilitada, `max.in.flight=5`.
+- Compresión `snappy`, `linger.ms=10`, `batch.size=16384`.
+- Timeouts acotados: `request.timeout.ms=5000`, `delivery.timeout.ms=10000` y `max.block.ms=5000`. El productor resuelve cada envío antes de que `OutboxRelay` deje de esperar (`send-timeout-ms`, 15 s). Así un envío fallido no queda en el buffer para entregarse más tarde y duplicarse con el reintento.
+
+**`OutboxRelay`:**
+- Lee lotes de pendientes con `FOR UPDATE SKIP LOCKED`, lo que permite varias instancias.
+- Publica el JSON almacenado tal cual y espera el ack del broker.
+- Ante un error registra `attempts` y `last_error` y corta el lote, para no publicar fuera de orden.
+
+`KafkaEventPublisher` solo lo usa `CreateCardService`, que no está en uso (§10).
 
 Las clases `CardBlockedEvent`, `CardUnblockedEvent` y `PINResetEvent` existen vacías: hoy **no se publican eventos** de bloqueo, desbloqueo ni cambio de PIN, aunque `card-events` ya define los topics `card.blocked` y `card.unblocked`. Ver [EVENTS.md](EVENTS.md).
 
@@ -480,6 +503,9 @@ Las clases `CardBlockedEvent`, `CardUnblockedEvent` y `PINResetEvent` existen va
 | `spring.flyway.enabled` | `false` |
 | `spring.kafka.bootstrap-servers` | `localhost:9092` |
 | `encryption.secret-key` | clave de desarrollo (32 caracteres) |
+| `card.data.outbox.poll-interval-ms` | `1000` (frecuencia del relay) |
+| `card.data.outbox.batch-size` | `50` (eventos por pasada) |
+| `card.data.outbox.send-timeout-ms` | `15000` (debe superar `delivery.timeout.ms` + `max.block.ms`) |
 | `management.endpoints.web.exposure.include` | `health,info,metrics` |
 
 El perfil `card-data` (`application-card-data.yml`) agrega logging a archivo (`logs/card-data.log`), métricas Prometheus y la configuración de SpringDoc. Es el perfil que activa `docker-compose`.
@@ -505,16 +531,14 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-data-service
 
 Comportamientos actuales del código que conviene tener presentes:
 
-1. ~~**Transiciones de estado sin validar.**~~ *Resuelto:* `CardStatus.canTransitionTo` define las transiciones (§3.5); `updateStatus`, `cancel` y `expire` las validan, y `block`/`blockForFraud` exigen `canBlock()`. Una transición inválida responde **422** y un estado inexistente, **400**.
-2. ~~**`unblock` sobre una tarjeta no bloqueada daba 500.**~~ *Resuelto:* lanza `BusinessRuleException` → **422**.
-3. ~~**Endpoints internos con `Map`.**~~ *Resuelto:* `/status`, `/activated-at` y `/card-data` reciben DTOs con Bean Validation y están documentados en OpenAPI. `PUT /status` usa `UpdateCardStatusUseCase`; los tres responden **404** si la tarjeta no existe (antes, 500).
-4. **Longitud de PIN inconsistente.** `ValidatePINRequest` y `ResetPINRequest` exigen 4 dígitos; `ActivateCardRequest` (sin uso) admite 4–6.
-5. **Sin control de intentos de PIN** ni bloqueo automático tras fallos.
-6. **Publicación a Kafka sin garantía.** Si falla tras el commit, el evento se pierde (no hay patrón outbox); `card-lifecycle` no se entera del alta.
-7. **Código duplicado o sin uso:** `CreateCardService` (camino alternativo de alta que publica directo a Kafka, no lo usa ningún controller), `CardHolderEmbeddable` (con longitudes distintas a `CardEntity`), `CardHolderEntity`, `CardJpaConfig`, `application/config/CardUseCaseConfig` y las excepciones de `domain/exception` (clases vacías). `CardEntityMapper` tiene además las sobrecargas `toEntity(Card)` / `toDomain(CardEntity)` que cifran por su cuenta y no se usan.
-8. **Clave de cifrado en docker-compose ignorada.** El compose define `ENCRYPTION_KEY`, pero la propiedad que lee `AesEncryptionService` es `encryption.secret-key` (variable de entorno equivalente: `ENCRYPTION_SECRET_KEY`), así que el contenedor usa la clave por defecto.
-9. **URL de card-data en payment-processing.** Su default es `http://localhost:8080`, mientras que card-data escucha en `8081`.
-10. **El esquema vive en otro repo.** Las migraciones están en `card-management-database` y no se versionan con el código: cualquier cambio en `CardEntity` requiere una migración nueva allá. Las diferencias que provocaban errores (`INFINITE`, longitudes de `holder_address` y `block_reason`) se corrigen con la V8 (§6.1.1).
-11. **Sin autenticación/autorización** en la API, incluidos los endpoints que modifican datos sensibles.
-12. **Tests**: solo `CardTest` y `CardManagementServiceTest`; no hay tests de controllers, de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`.
-13. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.
+1. **Consumidores sin deduplicación.** El outbox entrega *at-least-once*: si la instancia cae entre el envío y el commit, el evento se vuelve a publicar con el mismo `eventId`. `card-lifecycle` no deduplica, así que registraría dos veces la transición `CREATE` ([EVENTS.md](EVENTS.md)).
+2. **El outbox no se purga.** Los eventos publicados quedan en `outbox_events` indefinidamente; falta un job de limpieza (por ejemplo, borrar los publicados hace más de N días).
+3. **Un evento que siempre falla frena a los siguientes.** El relay corta el lote ante el primer error para mantener el orden, pero no hay límite de intentos ni DLQ: un evento que nunca se puede publicar bloquea la cola. `attempts` y `last_error` permiten detectarlo.
+4. **Logs de SQL del relay.** Con `org.hibernate.SQL` en `DEBUG` (configuración actual), el relay loguea su consulta cada segundo aunque no haya eventos.
+5. **Código duplicado o sin uso:** `CreateCardService` (camino alternativo de alta que publica directo a Kafka sin pasar por el outbox; no lo usa ningún controller), `CardHolderEmbeddable` (con longitudes distintas a `CardEntity`), `CardHolderEntity`, `CardJpaConfig`, `application/config/CardUseCaseConfig` y las excepciones de `domain/exception` (clases vacías). `CardEntityMapper` tiene además las sobrecargas `toEntity(Card)` / `toDomain(CardEntity)` que cifran por su cuenta y no se usan.
+6. **Clave de cifrado en docker-compose ignorada.** El compose define `ENCRYPTION_KEY`, pero la propiedad que lee `AesEncryptionService` es `encryption.secret-key` (variable de entorno equivalente: `ENCRYPTION_SECRET_KEY`), así que el contenedor usa la clave por defecto.
+7. **URL de card-data en payment-processing.** Su default es `http://localhost:8080`, mientras que card-data escucha en `8081`.
+8. **El esquema vive en otro repo.** Las migraciones están en `card-management-database` y no se versionan con el código: cualquier cambio en `CardEntity` requiere una migración nueva allá.
+9. **Sin autenticación/autorización** en la API, incluidos los endpoints que modifican datos sensibles.
+10. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay, pero ninguno de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`. `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
+11. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.

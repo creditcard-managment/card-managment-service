@@ -79,6 +79,10 @@ public class CardEntity {
     @Column(name = "pin_hash", columnDefinition = "TEXT")
     private String pinHash;  // BCrypt hash
 
+    @Column(name = "pin_failed_attempts", nullable = false)
+    @Builder.Default
+    private Integer pinFailedAttempts = 0;
+
     // =============================================
     // METADATOS DE LA TARJETA
     // =============================================

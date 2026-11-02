@@ -132,3 +132,8 @@ card:
       enabled: true
     validation:
       strict-mode: true
+    # Outbox: publicación de eventos a Kafka (OutboxRelay)
+    outbox:
+      poll-interval-ms: 1000     # Frecuencia de lectura de eventos pendientes
+      batch-size: 50             # Eventos por pasada
+      send-timeout-ms: 15000     # Espera por evento; debe superar delivery.timeout.ms + max.block.ms del productor

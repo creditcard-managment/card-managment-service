@@ -51,7 +51,7 @@ class CardStatusEndpointsTest {
     @BeforeEach
     void setUp() {
         repository = new InMemoryCardRepository();
-        CardManagementService managementService = new CardManagementService(repository, event -> { });
+        CardManagementService managementService = new CardManagementService(repository, (topic, aggregateId, event) -> { });
         CardSecurityService securityService = new CardSecurityService(repository);
         CardDtoMapper mapper = new CardDtoMapper();
 

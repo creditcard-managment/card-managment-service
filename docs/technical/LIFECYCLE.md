@@ -72,9 +72,9 @@ Según la operación, el módulo actualiza la tarjeta por caminos distintos:
 
 | Operación | Servicio | Cómo modifica la tarjeta | Valida estado actual |
 |---|---|---|---|
-| Aprobar | `ApproveCardService` | REST → `card-data` | No |
-| Emitir | `IssueCardService` | REST → `card-data` | No |
-| Activar | `ActivateCardService` | REST → `card-data` | No |
+| Aprobar | `ApproveCardService` | REST → `card-data` | No (la valida card-data: 422) |
+| Emitir | `IssueCardService` | REST → `card-data` | No (la valida card-data: 422) |
+| Activar | `ActivateCardService` | REST → `card-data` | No (la valida card-data: 422) |
 | Rechazar | `CardLifecycleService` | JPA directo sobre `cards` (`CardAdapter`) | Sí (dominio `Card`) |
 | Bloquear / Bloquear por fraude | `CardLifecycleService` | JPA directo sobre `cards` | Sí |
 | Cancelar | `CardLifecycleService` | JPA directo sobre `cards` | Sí |
@@ -452,7 +452,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-lifecycle-service
 Comportamientos actuales del código que conviene resolver:
 
 1. **La state machine no se ejecuta.** Guards, actions y listener están configurados, pero ningún servicio dispara eventos. Las reglas que solo están en la state machine (por ejemplo, los guards) no se aplican.
-2. **Aprobar, emitir y activar no validan el estado actual.** Los servicios REST llaman a `card-data`, que tampoco valida ([DATA.md §10](DATA.md)). Se puede, por ejemplo, activar una tarjeta `REQUESTED` o `CANCELLED`, y el historial registrará igual un `fromState` fijo y posiblemente falso.
+2. **Aprobar, emitir y activar no manejan el rechazo de card-data.** Estos servicios no validan el estado y delegan en card-data, que sí valida la transición y responde **422** si no está permitida ([DATA.md §3.5](DATA.md)). card-lifecycle no captura ese error: `RestTemplate` lanza `HttpClientErrorException` y el cliente recibe **500**, sin transición fallida registrada. El `fromState` que se registra en los casos exitosos sigue siendo fijo y no se lee del estado real.
 3. **No se valida el límite de crédito al activar.** La regla existe en `CardLifecycleService.activateCard()` y en `ActivationGuard`, pero el endpoint usa `ActivateCardService`, que no la invoca.
 4. **El PIN de activación se pide y se ignora.** `ActivateCardRequest.pin` es obligatorio pero no se verifica contra `card-data` (`POST /cards/{id}/validate-pin`).
 5. **Bloquear o cancelar una tarjeta emitida falla.** `CardAdapter` “descifra” `card_number_encrypted` quitando el prefijo `ENCRYPTED_`, pero `card-data` guarda AES-GCM en Base64. `CardNumber.of(...)` rechaza ese texto (longitud y Luhn) y la operación devuelve 500. Si el formato llegara a ser compatible, `save()` además sobrescribiría el PAN y el CVV cifrados con el placeholder.

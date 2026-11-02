@@ -224,7 +224,7 @@ Puntos clave:
 4. Crea una transacción `REFUND` y la aprueba.
 5. Llama a `card-limits restoreCredit` → guarda → publica `RefundInitiated` (+ `PaymentProcessed`).
 
-> Este es el flujo diseñado; hoy falla en el paso 4 (ver §10.1, punto 5).
+> Este es el flujo diseñado; hoy falla en el paso 4 (ver §10.1, punto 3).
 
 ### 4.5 Liquidación
 
@@ -471,36 +471,34 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 ### 10.1 Bloqueantes
 
-1. ~~**No compilaba.**~~ *Resuelto:* `cardId` y `merchantId` ahora son `String` en la entidad, el mapper (`extractMerchantId` guarda el id tal cual), el adapter y los repositorios (`JpaTransactionRepository`, `CustomTransactionRepository`), alineados con `VARCHAR(36)` de la migración V5 en `card-management-database`.
-2. **FK de `merchant_id`.** La migración V5 define `merchant_id → merchants(id)` y `card_id → cards(id)`. Una transacción solo se puede guardar si el comercio existe en `merchants`; los adelantos usan `merchantId = "ATM-<terminalId>"`, que no va a existir, y cualquier id de más de 36 caracteres excede la columna.
-3. ~~**`toEntity` estaba incompleto.**~~ *Resuelto:* mapea todos los campos del aggregate (montos y conversión, tarjeta, autorización, comercio, terminal, fechas, riesgo, motivos y `version`). `reversal_reason` se completa cuando el estado es `REVERSED`. `TransactionPersistenceAdapter.save()` deja `version` en `null` para las transacciones nuevas, para que se inserten en lugar de hacer un `merge` sobre una fila inexistente.
-4. **Las validaciones previas siempre rechazan.**
+1. **FK de `merchant_id`.** La migración V5 define `merchant_id → merchants(id)` y `card_id → cards(id)`. Una transacción solo se puede guardar si el comercio existe en `merchants`; los adelantos usan `merchantId = "ATM-<terminalId>"`, que no va a existir, y cualquier id de más de 36 caracteres excede la columna.
+2. **Las validaciones previas siempre rechazan.**
    - `GET /api/v1/cards/{id}/status` no existe en card-data y la URL por defecto apunta a `8080` → `isCardActive=false` → toda compra termina en 400 `CARD_VALIDATION_FAILED`.
    - Si se corrigiera eso, el servicio de comercios no existe (→ comercio inactivo) y card-limits no expone los endpoints esperados (→ disponible `0 USD`, 402).
-5. **Las devoluciones nunca funcionan.** `createRefund` deja la transacción en `PENDING` y `processRefund` llama a `approve()`, que exige `AUTHORIZED` → `InvalidTransactionException` (400).
-6. **Reversos y liquidaciones fallan:** dependen de `releaseCredit` y `consumeCredit` en card-limits, que no existen (500). En batch, los errores se capturan y la respuesta sale “exitosa” con 0 liquidadas (`failedTransactionIds` siempre vacío).
+3. **Las devoluciones nunca funcionan.** `createRefund` deja la transacción en `PENDING` y `processRefund` llama a `approve()`, que exige `AUTHORIZED` → `InvalidTransactionException` (400).
+4. **Reversos y liquidaciones fallan:** dependen de `releaseCredit` y `consumeCredit` en card-limits, que no existen (500). En batch, los errores se capturan y la respuesta sale “exitosa” con 0 liquidadas (`failedTransactionIds` siempre vacío).
 
 ### 10.2 Reglas de negocio
 
-7. **Los rechazos no se registran:** validaciones, fraude y autorización lanzan excepciones antes de `save()`. No queda la transacción `DECLINED` ni se emite `PaymentDeclined`, y la rama 402 del controller con `PaymentResponse` nunca se ejecuta.
-8. **Una autorización declinada se reporta mal:** el adapter devuelve un código declinado (no lanza excepción) y `authorize()` lo rechaza con `InvalidTransactionException` → 400 en lugar de 402 `AUTHORIZATION_FAILED`. Además, eso ocurre **después** de `reserveCredit`, así que el crédito queda reservado sin transacción que lo libere.
-9. **El adelanto se procesa como compra:** el tipo queda `PURCHASE`, el PIN se pide pero no se verifica y no se aplican reglas propias (por ejemplo `validatePaymentMethod` con `CASH_ADVANCE`).
-10. **CVV sin validar:** se recibe pero no se envía a nadie, aunque `ONLINE`/`MANUAL` lo requieren.
-11. **Devoluciones parciales sin control acumulado:** cada parcial se compara contra el original, no contra lo ya devuelto. Tampoco se persiste el vínculo con la transacción original.
-12. **Captura inutilizable:** no hay flujo de preautorización; `authorizeTransaction` no hace nada y no tiene endpoint.
-13. **El vencimiento real no se valida:** se usa el `expirationDate` que envía el cliente. `isCardExpired()` del adapter siempre devuelve `false` y no se usa.
-14. **El score de fraude se calcula 2 o 3 veces por compra** (con 2–3 llamadas al servicio externo) y el valor guardado puede no ser el mismo que se evaluó.
-15. **Límite de 50.000 inconsistente:** el request admite hasta 50.000,00, pero el autorizador simulado declina con monto ≥ 50.000.
+5. **Los rechazos no se registran:** validaciones, fraude y autorización lanzan excepciones antes de `save()`. No queda la transacción `DECLINED` ni se emite `PaymentDeclined`, y la rama 402 del controller con `PaymentResponse` nunca se ejecuta.
+6. **Una autorización declinada se reporta mal:** el adapter devuelve un código declinado (no lanza excepción) y `authorize()` lo rechaza con `InvalidTransactionException` → 400 en lugar de 402 `AUTHORIZATION_FAILED`. Además, eso ocurre **después** de `reserveCredit`, así que el crédito queda reservado sin transacción que lo libere.
+7. **El adelanto se procesa como compra:** el tipo queda `PURCHASE`, el PIN se pide pero no se verifica y no se aplican reglas propias (por ejemplo `validatePaymentMethod` con `CASH_ADVANCE`).
+8. **CVV sin validar:** se recibe pero no se envía a nadie, aunque `ONLINE`/`MANUAL` lo requieren.
+9. **Devoluciones parciales sin control acumulado:** cada parcial se compara contra el original, no contra lo ya devuelto. Tampoco se persiste el vínculo con la transacción original.
+10. **Captura inutilizable:** no hay flujo de preautorización; `authorizeTransaction` no hace nada y no tiene endpoint.
+11. **El vencimiento real no se valida:** se usa el `expirationDate` que envía el cliente. `isCardExpired()` del adapter siempre devuelve `false` y no se usa.
+12. **El score de fraude se calcula 2 o 3 veces por compra** (con 2–3 llamadas al servicio externo) y el valor guardado puede no ser el mismo que se evaluó.
+13. **Límite de 50.000 inconsistente:** el request admite hasta 50.000,00, pero el autorizador simulado declina con monto ≥ 50.000.
 
 ### 10.3 Técnicas
 
-16. **Eventos antes del commit:** se publican dentro de `@Transactional`. Si el commit falla, ya salieron eventos de una transacción inexistente. No hay outbox.
-17. **Key Kafka = `eventId`:** no hay orden por transacción ni por tarjeta. Replication factor 2 con un broker en compose. Nadie consume estos topics.
-18. **Puertos y URLs por defecto cruzados:** todos los `services.*` apuntan a `localhost:8080/8081/8082`, que no corresponden a los servicios correctos, y compose no los define.
-19. **Base de datos distinta por defecto** (`card_management` vs `card_management_db`).
-20. **Configuración sin efecto:** Flyway, `fraud.velocity.*`, `spring.application.name: card-management-service` (nombre del proyecto padre, no del servicio).
-21. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `RefundProcessed`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
-22. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
-23. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
-24. **Seguridad:** sin autenticación; el token del PAN lo provee el cliente (no hay servicio de tokenización); el PIN viaja en claro en el request.
-25. **Sin tests:** no existe `src/test`, aunque el `pom.xml` configura JaCoCo.
+14. **Eventos antes del commit:** se publican dentro de `@Transactional`. Si el commit falla, ya salieron eventos de una transacción inexistente. No hay outbox.
+15. **Key Kafka = `eventId`:** no hay orden por transacción ni por tarjeta. Replication factor 2 con un broker en compose. Nadie consume estos topics.
+16. **Puertos y URLs por defecto cruzados:** todos los `services.*` apuntan a `localhost:8080/8081/8082`, que no corresponden a los servicios correctos, y compose no los define.
+17. **Base de datos distinta por defecto** (`card_management` vs `card_management_db`).
+18. **Configuración sin efecto:** Flyway, `fraud.velocity.*`, `spring.application.name: card-management-service` (nombre del proyecto padre, no del servicio).
+19. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `RefundProcessed`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
+20. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
+21. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
+22. **Seguridad:** sin autenticación; el token del PAN lo provee el cliente (no hay servicio de tokenización); el PIN viaja en claro en el request.
+23. **Sin tests:** no existe `src/test`, aunque el `pom.xml` configura JaCoCo.

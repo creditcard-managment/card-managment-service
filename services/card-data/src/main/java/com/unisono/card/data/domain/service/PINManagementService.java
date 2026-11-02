@@ -16,7 +16,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Servicio de gestión de PIN
- * Implementa los use cases de validación y reset de PIN
+ * Implementa los use cases de validación y reset de PIN.
+ *
+ * Cada PIN incorrecto suma un intento fallido; al llegar a Card.MAX_PIN_ATTEMPTS
+ * la tarjeta se bloquea. Un PIN correcto reinicia el contador.
  */
 @Slf4j
 @Service
@@ -32,11 +35,11 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
     // ========================================
 
     @Override
-    @Transactional(readOnly = true)
     public boolean execute(ValidatePINCommand command) {
         log.debug("Validating PIN for card: {}", command.cardId());
 
         Card card = getCardOrThrow(command.cardId());
+        ensureNotBlocked(card);
 
         if (!card.isPINSet()) {
             log.warn("Card {} does not have a PIN set", command.cardId());
@@ -47,10 +50,13 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
         boolean isValid = encryptionPort.verifyHash(command.plainPin(), card.getPinHash());
 
         if (isValid) {
+            card.resetPinFailedAttempts();
             log.debug("PIN validated successfully for card: {}", command.cardId());
         } else {
-            log.warn("Invalid PIN attempt for card: {}", command.cardId());
+            registerFailedAttempt(card);
         }
+
+        cardRepository.save(card);
 
         return isValid;
     }
@@ -59,11 +65,17 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
     // ResetPINUseCase
     // ========================================
 
+    /**
+     * noRollbackFor: el intento fallido registrado ante un PIN actual incorrecto
+     * debe persistir aunque la operación termine con BusinessRuleException.
+     */
     @Override
+    @Transactional(noRollbackFor = BusinessRuleException.class)
     public Card execute(ResetPINCommand command) {
         log.info("Resetting PIN for card: {}", command.cardId());
 
         Card card = getCardOrThrow(command.cardId());
+        ensureNotBlocked(card);
 
         // Validar PIN actual (si está configurado)
         if (card.isPINSet()) {
@@ -73,7 +85,12 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
             );
 
             if (!isOldPINValid) {
-                throw new BusinessRuleException("El PIN actual es incorrecto");
+                boolean blocked = registerFailedAttempt(card);
+                cardRepository.save(card);
+                throw new BusinessRuleException(blocked
+                        ? "El PIN actual es incorrecto. La tarjeta fue bloqueada por exceso de intentos"
+                        : String.format("El PIN actual es incorrecto. Intentos restantes: %d",
+                                card.getRemainingPinAttempts()));
             }
         }
 
@@ -96,6 +113,24 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
     // ========================================
     // Helper methods
     // ========================================
+
+    private boolean registerFailedAttempt(Card card) {
+        boolean blocked = card.registerFailedPinAttempt();
+        if (blocked) {
+            log.warn("Card {} blocked after {} failed PIN attempts", card.getId(), card.getPinFailedAttempts());
+        } else {
+            log.warn("Invalid PIN attempt for card: {} ({} remaining)", card.getId(), card.getRemainingPinAttempts());
+        }
+        return blocked;
+    }
+
+    private void ensureNotBlocked(Card card) {
+        if (card.isBlocked()) {
+            throw new BusinessRuleException(
+                    String.format("La tarjeta está bloqueada. Razón: %s", card.getBlockReason())
+            );
+        }
+    }
 
     private Card getCardOrThrow(CardId cardId) {
         return cardRepository.findById(cardId)

@@ -14,6 +14,11 @@ import java.time.LocalDateTime;
 @ToString
 public class Card {
 
+    /**
+     * Intentos fallidos de PIN consecutivos que bloquean la tarjeta
+     */
+    public static final int MAX_PIN_ATTEMPTS = 3;
+
     private CardId id;
     private ClientId clientId;
     private CardHolder holder;
@@ -29,6 +34,10 @@ public class Card {
 
     // ✅ Hash del PIN (esto SÍ se persiste en BD)
     private String pinHash;
+
+    // Intentos fallidos de PIN consecutivos (se reinicia con un PIN correcto)
+    @Builder.Default
+    private int pinFailedAttempts = 0;
     private ExpirationDate expirationDate;
 
     private LocalDateTime createdAt;
@@ -83,6 +92,7 @@ public class Card {
             CardNumber cardNumber,
             CVV cvv,
             String pinHash,
+            int pinFailedAttempts,
             CardType type,
             CardCategory category,
             ExpirationDate expirationDate,
@@ -106,6 +116,7 @@ public class Card {
                 .cardNumber(cardNumber)
                 .cvv(cvv)
                 .pinHash(pinHash)
+                .pinFailedAttempts(pinFailedAttempts)
                 .pin(null)
                 .type(type)
                 .category(category)
@@ -207,6 +218,7 @@ public class Card {
         this.status = CardStatus.ACTIVE;
         this.blockReason = null;
         this.blockedAt = null;
+        this.pinFailedAttempts = 0;
         this.updatedAt = LocalDateTime.now();
     }
 
@@ -316,6 +328,7 @@ public class Card {
         }
         this.pinHash = hashedPin;
         this.pin = null; // Limpiar PIN plano
+        this.pinFailedAttempts = 0;
         this.updatedAt = LocalDateTime.now();
     }
 
@@ -328,7 +341,42 @@ public class Card {
         }
         this.pinHash = hashedPin;
         this.pin = null; // Limpiar PIN plano
+        this.pinFailedAttempts = 0;
         this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Registra un intento fallido de PIN.
+     * Al alcanzar MAX_PIN_ATTEMPTS bloquea la tarjeta (si su estado lo permite).
+     *
+     * @return true si la tarjeta quedó bloqueada por este intento
+     */
+    public boolean registerFailedPinAttempt() {
+        this.pinFailedAttempts++;
+        this.updatedAt = LocalDateTime.now();
+
+        if (this.pinFailedAttempts >= MAX_PIN_ATTEMPTS && this.status.canBlock()) {
+            block(String.format("Bloqueo automático: %d intentos fallidos de PIN", this.pinFailedAttempts));
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Reinicia el contador de intentos fallidos (tras un PIN correcto)
+     */
+    public void resetPinFailedAttempts() {
+        if (this.pinFailedAttempts != 0) {
+            this.pinFailedAttempts = 0;
+            this.updatedAt = LocalDateTime.now();
+        }
+    }
+
+    /**
+     * Intentos de PIN restantes antes del bloqueo automático
+     */
+    public int getRemainingPinAttempts() {
+        return Math.max(0, MAX_PIN_ATTEMPTS - this.pinFailedAttempts);
     }
 
     /**
