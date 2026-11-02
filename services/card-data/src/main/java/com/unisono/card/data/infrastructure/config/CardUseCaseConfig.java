@@ -2,12 +2,12 @@ package com.unisono.card.data.infrastructure.config;
 
 import com.unisono.card.data.domain.port.input.*;
 import com.unisono.card.data.domain.port.output.CardRepository;
+import com.unisono.card.data.domain.port.output.EventOutboxPort;
 import com.unisono.card.data.domain.port.output.EncryptionPort;
 import com.unisono.card.data.domain.service.CardManagementService;
 import com.unisono.card.data.domain.service.CardSecurityService;
 import com.unisono.card.data.domain.service.CardValidationService;
 import com.unisono.card.data.domain.service.PINManagementService;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -25,8 +25,8 @@ public class CardUseCaseConfig {
      * - GetCardUseCase
      */
     @Bean
-    public CardManagementService cardManagementService(CardRepository cardRepository, ApplicationEventPublisher event) {
-        return new CardManagementService(cardRepository, event);
+    public CardManagementService cardManagementService(CardRepository cardRepository, EventOutboxPort eventOutbox) {
+        return new CardManagementService(cardRepository, eventOutbox);
     }
 
     /**

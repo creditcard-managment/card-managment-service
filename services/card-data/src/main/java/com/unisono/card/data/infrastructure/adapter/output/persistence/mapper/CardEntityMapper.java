@@ -59,6 +59,7 @@ public class CardEntityMapper {
         } else {
             entity.setPinHash(card.getPinHash());
         }
+        entity.setPinFailedAttempts(card.getPinFailedAttempts());
 
         // Expiración
         if (card.getExpirationDate() != null) {
@@ -128,6 +129,7 @@ public class CardEntityMapper {
         } else {
             entity.setPinHash(card.getPinHash());
         }
+        entity.setPinFailedAttempts(card.getPinFailedAttempts());
 
         // Expiración
         if (card.getExpirationDate() != null) {
@@ -209,6 +211,7 @@ public class CardEntityMapper {
                 cardNumber,
                 cvv,
                 entity.getPinHash(),
+                entity.getPinFailedAttempts() != null ? entity.getPinFailedAttempts() : 0,
                 entity.getType(),
                 entity.getCategory(),
                 expirationDate,
@@ -274,6 +277,7 @@ public class CardEntityMapper {
                 cardNumber,
                 cvv,
                 entity.getPinHash(),
+                entity.getPinFailedAttempts() != null ? entity.getPinFailedAttempts() : 0,
                 entity.getType(),
                 entity.getCategory(),
                 expirationDate,

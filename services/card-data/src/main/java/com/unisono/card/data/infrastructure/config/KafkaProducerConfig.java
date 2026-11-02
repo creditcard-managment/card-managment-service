@@ -48,6 +48,13 @@ public class KafkaProducerConfig {
         configProps.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
         configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
 
+        // Timeouts acotados: el productor debe resolver cada envío (éxito o error) antes de que
+        // OutboxRelay deje de esperar (card.data.outbox.send-timeout-ms). Así un envío fallido
+        // no queda en el buffer para entregarse más tarde y duplicarse con el reintento del relay.
+        configProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 5000);
+        configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 10000);
+        configProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5000);
+
         // Configuración de performance
         configProps.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "snappy");
         configProps.put(ProducerConfig.LINGER_MS_CONFIG, 10);

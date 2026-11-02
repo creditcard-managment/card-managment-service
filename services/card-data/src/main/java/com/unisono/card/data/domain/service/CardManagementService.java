@@ -1,17 +1,18 @@
 package com.unisono.card.data.domain.service;
 
-import com.unisono.card.data.domain.event.CardCreatedDomainEvent;
 import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.port.input.CreateCardUseCase;
 import com.unisono.card.data.domain.port.input.GetCardUseCase;
 import com.unisono.card.data.domain.port.input.UpdateCardStatusUseCase;
 import com.unisono.card.data.domain.port.output.CardRepository;
+import com.unisono.card.data.domain.port.output.EventOutboxPort;
+import com.unisono.card.events.config.KafkaTopics;
+import com.unisono.card.events.domain.CardCreatedEvent;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.exception.ValidationException;
 import com.unisono.card.shared.domain.valueobject.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,7 +31,7 @@ import java.util.Optional;
 public class CardManagementService implements CreateCardUseCase, GetCardUseCase, UpdateCardStatusUseCase {
 
     private final CardRepository cardRepository;
-    private final ApplicationEventPublisher eventPublisher;
+    private final EventOutboxPort eventOutbox;
     // ========================================
     // CreateCardUseCase
     // ========================================
@@ -50,11 +51,17 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase,
         // Guardar en BD
         Card savedCard = cardRepository.save(card);
 
-        log.info("Card created successfully with ID: {}", savedCard.getId());
+        // Encolar el evento en la misma transacción (outbox); OutboxRelay lo publica en Kafka
+        eventOutbox.enqueue(KafkaTopics.CARD_CREATED, savedCard.getId().getValue(), new CardCreatedEvent(
+                savedCard.getId().getValue(),
+                savedCard.getClientId().getValue(),
+                savedCard.getHolder().getFullName(),
+                savedCard.getType().name(),
+                savedCard.getCategory().name(),
+                "system"
+        ));
 
-        log.info("🔵 Publishing CardCreatedDomainEvent to Spring...");
-        eventPublisher.publishEvent(new CardCreatedDomainEvent(savedCard));
-        log.info("🔵 ✅ CardCreatedDomainEvent published to Spring");
+        log.info("Card created successfully with ID: {}", savedCard.getId());
 
         return savedCard;
     }
