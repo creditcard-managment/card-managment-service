@@ -1,11 +1,13 @@
 package com.unisono.card.data.infrastructure.adapter.input.rest;
 
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
+import com.unisono.card.shared.domain.exception.InvalidValueObjectException;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.exception.ValidationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -93,6 +95,40 @@ public class GlobalExceptionHandler {
                 .error("Validation Error")
                 .message("Invalid request parameters")
                 .fieldErrors(fieldErrors)
+                .build();
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Maneja InvalidValueObjectException (Value Objects con formato inválido)
+     */
+    @ExceptionHandler(InvalidValueObjectException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidValueObject(InvalidValueObjectException ex) {
+        log.error("InvalidValueObjectException: {}", ex.getMessage());
+
+        ErrorResponse error = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error("Validation Error")
+                .message(ex.getMessage())
+                .build();
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Maneja bodies ilegibles: JSON mal formado, enum inexistente, fecha inválida
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleNotReadable(HttpMessageNotReadableException ex) {
+        log.error("HttpMessageNotReadableException: {}", ex.getMostSpecificCause().getMessage());
+
+        ErrorResponse error = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error("Validation Error")
+                .message("Malformed request body: " + ex.getMostSpecificCause().getMessage())
                 .build();
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);

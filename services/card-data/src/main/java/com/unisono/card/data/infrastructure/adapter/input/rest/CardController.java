@@ -1,12 +1,16 @@
 package com.unisono.card.data.infrastructure.adapter.input.rest;
 
 import com.unisono.card.data.application.dto.request.CreateCardRequest;
+import com.unisono.card.data.application.dto.request.UpdateActivatedAtRequest;
+import com.unisono.card.data.application.dto.request.UpdateCardDataRequest;
+import com.unisono.card.data.application.dto.request.UpdateCardStatusRequest;
 import com.unisono.card.data.application.dto.response.CardDetailResponse;
 import com.unisono.card.data.application.dto.response.CardResponse;
 import com.unisono.card.data.application.mapper.CardDtoMapper;
 import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.port.input.CreateCardUseCase;
 import com.unisono.card.data.domain.port.input.GetCardUseCase;
+import com.unisono.card.data.domain.port.input.UpdateCardStatusUseCase;
 import com.unisono.card.data.domain.service.CardManagementService;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
@@ -23,9 +27,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -41,6 +43,7 @@ public class CardController {
     private final CardManagementService cardManagementService;
     private final CreateCardUseCase createCardUseCase;
     private final GetCardUseCase getCardUseCase;
+    private final UpdateCardStatusUseCase updateCardStatusUseCase;
     private final CardDtoMapper mapper;
 
     /**
@@ -145,49 +148,85 @@ public class CardController {
         return ResponseEntity.ok(response);
     }
 
+    /**
+     * Cambiar el estado de una tarjeta (usado por card-lifecycle)
+     */
     @PutMapping("/{cardId}/status")
+    @Operation(summary = "Cambiar estado de tarjeta",
+            description = "Cambia el estado validando que la transición esté permitida")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Estado actualizado"),
+            @ApiResponse(responseCode = "400", description = "Estado ausente o inexistente"),
+            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada"),
+            @ApiResponse(responseCode = "422", description = "Transición de estado no permitida")
+    })
     public ResponseEntity<Void> updateStatus(
+            @Parameter(description = "ID de la tarjeta")
             @PathVariable String cardId,
-            @RequestBody Map<String, String> request) {
 
-        log.info("Actualizando estado de tarjeta: {} -> {}", cardId, request.get("status"));
+            @Valid @RequestBody UpdateCardStatusRequest request
+    ) {
+        log.info("Actualizando estado de tarjeta: {} -> {}", cardId, request.getStatus());
 
-        // ✅ Usar el servicio existente
-        cardManagementService.updateStatus(cardId, request.get("status"));
+        updateCardStatusUseCase.execute(new UpdateCardStatusUseCase.UpdateStatusCommand(
+                CardId.of(cardId),
+                request.getStatus(),
+                request.getReason()
+        ));
 
         return ResponseEntity.ok().build();
     }
 
+    /**
+     * Registrar la fecha de activación (usado por card-lifecycle)
+     */
     @PutMapping("/{cardId}/activated-at")
+    @Operation(summary = "Registrar fecha de activación",
+            description = "Registra la fecha y hora en que se activó la tarjeta")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Fecha registrada"),
+            @ApiResponse(responseCode = "400", description = "Fecha ausente o con formato inválido"),
+            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada")
+    })
     public ResponseEntity<Void> updateActivatedAt(
+            @Parameter(description = "ID de la tarjeta")
             @PathVariable String cardId,
-            @RequestBody Map<String, String> request) {
 
+            @Valid @RequestBody UpdateActivatedAtRequest request
+    ) {
         log.info("Actualizando fecha de activación: {}", cardId);
 
-        LocalDateTime activatedAt = LocalDateTime.parse(request.get("activatedAt"));
-
-        // ✅ Usar el servicio existente
-        cardManagementService.updateActivatedAt(cardId, activatedAt);
+        cardManagementService.updateActivatedAt(CardId.of(cardId), request.getActivatedAt());
 
         return ResponseEntity.ok().build();
     }
 
+    /**
+     * Cargar los datos de emisión (usado por card-lifecycle)
+     */
     @PutMapping("/{cardId}/card-data")
+    @Operation(summary = "Cargar datos de emisión",
+            description = "Asigna PAN, CVV, PIN y vencimiento. El PAN y el CVV se cifran y el PIN se hashea al persistir")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Datos de emisión cargados"),
+            @ApiResponse(responseCode = "400", description = "Datos ausentes o inválidos"),
+            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada")
+    })
     public ResponseEntity<Void> updateCardData(
+            @Parameter(description = "ID de la tarjeta")
             @PathVariable String cardId,
-            @RequestBody Map<String, Object> request) {
 
+            @Valid @RequestBody UpdateCardDataRequest request
+    ) {
         log.info("Actualizando datos de tarjeta: {}", cardId);
 
-        // ✅ Usar el servicio existente
         cardManagementService.updateCardData(
-                cardId,
-                (String) request.get("cardNumber"),
-                (String) request.get("cvv"),
-                (String) request.get("pin"),
-                (Integer) request.get("expirationMonth"),
-                (Integer) request.get("expirationYear")
+                CardId.of(cardId),
+                request.getCardNumber(),
+                request.getCvv(),
+                request.getPin(),
+                request.getExpirationMonth(),
+                request.getExpirationYear()
         );
 
         return ResponseEntity.ok().build();

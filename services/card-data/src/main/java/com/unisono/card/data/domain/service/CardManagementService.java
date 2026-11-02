@@ -4,8 +4,10 @@ import com.unisono.card.data.domain.event.CardCreatedDomainEvent;
 import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.port.input.CreateCardUseCase;
 import com.unisono.card.data.domain.port.input.GetCardUseCase;
+import com.unisono.card.data.domain.port.input.UpdateCardStatusUseCase;
 import com.unisono.card.data.domain.port.output.CardRepository;
 import com.unisono.card.shared.domain.exception.NotFoundException;
+import com.unisono.card.shared.domain.exception.ValidationException;
 import com.unisono.card.shared.domain.valueobject.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,13 +21,13 @@ import java.util.Optional;
 
 /**
  * Servicio de gestión de tarjetas
- * Implementa los use cases de creación y consulta
+ * Implementa los use cases de creación, consulta y cambio de estado
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional
-public class CardManagementService implements CreateCardUseCase, GetCardUseCase {
+public class CardManagementService implements CreateCardUseCase, GetCardUseCase, UpdateCardStatusUseCase {
 
     private final CardRepository cardRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -90,35 +92,34 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase 
                 .orElseThrow(() -> new NotFoundException("Card", cardId.toString()));
     }
 
-    /**
-     * Actualiza solo el estado de la tarjeta
-     */
-    @Transactional
-    public void updateStatus(String cardId, String status) {
-        log.info("Actualizando estado de tarjeta: {} -> {}", cardId, status);
+    // ========================================
+    // UpdateCardStatusUseCase
+    // ========================================
 
-        Card card = cardRepository.findById(CardId.of(cardId))
-                .orElseThrow(() -> new IllegalArgumentException("Tarjeta no encontrada: " + cardId));
+    @Override
+    public Card execute(UpdateStatusCommand command) {
+        log.info("Actualizando estado de tarjeta: {} -> {}", command.cardId(), command.newStatus());
 
-        // Actualizar status
-        card.updateStatus(CardStatus.valueOf(status));
+        Card card = getCardOrThrow(command.cardId());
 
-        cardRepository.save(card);
+        // Valida la transición en el aggregate (BusinessRuleException si no está permitida)
+        card.updateStatus(command.newStatus());
+
+        Card savedCard = cardRepository.save(card);
 
         log.info("Estado actualizado exitosamente");
+
+        return savedCard;
     }
 
     /**
      * Actualiza la fecha de activación
      */
-    @Transactional
-    public void updateActivatedAt(String cardId, LocalDateTime activatedAt) {
+    public void updateActivatedAt(CardId cardId, LocalDateTime activatedAt) {
         log.info("Actualizando fecha de activación de tarjeta: {}", cardId);
 
-        Card card = cardRepository.findById(CardId.of(cardId))
-                .orElseThrow(() -> new IllegalArgumentException("Tarjeta no encontrada: " + cardId));
+        Card card = getCardOrThrow(cardId);
 
-        // Actualizar fecha de activación
         card.setActivatedAt(activatedAt);
 
         cardRepository.save(card);
@@ -129,31 +130,36 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase 
     /**
      * Actualiza los datos de la tarjeta (número, cvv, pin, expiración)
      */
-    @Transactional
     public void updateCardData(
-            String cardId,
+            CardId cardId,
             String cardNumber,
             String cvv,
             String pin,
-            Integer expirationMonth,
-            Integer expirationYear
+            int expirationMonth,
+            int expirationYear
     ) {
         log.info("Actualizando datos de tarjeta: {}", cardId);
 
-        Card card = cardRepository.findById(CardId.of(cardId))
-                .orElseThrow(() -> new IllegalArgumentException("Tarjeta no encontrada: " + cardId));
+        Card card = getCardOrThrow(cardId);
 
-        // Crear Value Objects
+        // Crear Value Objects (ValidationException si el formato es inválido)
         CardNumber cardNumberVO = CardNumber.of(cardNumber);
         CVV cvvVO = CVV.of(cvv);
         PIN pinVO = PIN.of(pin);
-        ExpirationDate expirationDate = ExpirationDate.of(expirationMonth, expirationYear);
+        ExpirationDate expirationDate = toExpirationDate(expirationMonth, expirationYear);
 
-        // Actualizar datos en el dominio
         card.updateCardData(cardNumberVO, cvvVO, pinVO, expirationDate);
 
         cardRepository.save(card);
 
         log.info("Datos de tarjeta actualizados exitosamente");
+    }
+
+    private ExpirationDate toExpirationDate(int month, int year) {
+        try {
+            return ExpirationDate.of(month, year);
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException(e.getMessage());
+        }
     }
 }
