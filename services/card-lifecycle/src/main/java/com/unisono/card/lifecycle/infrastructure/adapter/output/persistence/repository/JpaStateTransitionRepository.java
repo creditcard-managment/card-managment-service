@@ -46,6 +46,11 @@ public interface JpaStateTransitionRepository extends JpaRepository<StateTransit
     boolean existsByCardId(String cardId);
 
     /**
+     * Verifica si una tarjeta ya tiene registrada una transición con ese evento (p. ej. CREATE)
+     */
+    boolean existsByCardIdAndEvent(String cardId, String event);
+
+    /**
      * Busca transiciones por evento
      */
     List<StateTransitionEntity> findByEvent(String event);

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.entity.OutboxEventEntity;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.repository.JpaOutboxEventRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.common.errors.RetriableException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -13,13 +14,17 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Relay del outbox
  *
  * Publica en Kafka los eventos pendientes de outbox_events, en orden de inserción,
- * esperando la confirmación del broker. Si un envío falla, registra el error y corta
- * el lote para no publicar fuera de orden; el evento se reintenta en la próxima pasada.
+ * esperando la confirmación del broker. Ante un error:
+ * - Transitorio (broker caído, timeout): registra el intento y corta el lote para no
+ *   publicar fuera de orden; el evento se reintenta en la próxima pasada, sin límite.
+ * - Permanente (payload inválido, mensaje demasiado grande, topic inválido): marca el
+ *   evento como fallido (failed_at) y sigue con los siguientes, para que no bloquee la cola.
  *
  * Semántica at-least-once: si la instancia cae entre el envío y el commit,
  * el evento se vuelve a publicar. Los consumidores deben deduplicar por eventId.
@@ -84,10 +89,15 @@ public class OutboxRelay {
                 break;
             } catch (Exception e) {
                 String error = describe(e);
-                event.markFailed(error);
-                log.error("❌ Outbox: failed to publish event {} ({}) to '{}', attempt {}: {}",
-                        event.getEventId(), event.getEventType(), event.getTopic(), event.getAttempts(), error);
-                break;
+                if (isTransient(e)) {
+                    event.markFailed(error);
+                    log.error("❌ Outbox: failed to publish event {} ({}) to '{}', attempt {}, will retry: {}",
+                            event.getEventId(), event.getEventType(), event.getTopic(), event.getAttempts(), error);
+                    break;
+                }
+                event.markDead(error);
+                log.error("☠️ Outbox: event {} ({}) to '{}' failed permanently and will not be retried: {}",
+                        event.getEventId(), event.getEventType(), event.getTopic(), error);
             }
         }
 
@@ -95,8 +105,25 @@ public class OutboxRelay {
         return published;
     }
 
+    /**
+     * Un error es transitorio si en la cadena de causas hay una RetriableException de Kafka
+     * (broker no disponible, timeout de metadata, líder no disponible...) o un timeout de espera.
+     * Spring lo envuelve: ExecutionException → KafkaProducerException → causa real.
+     */
+    static boolean isTransient(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof RetriableException || t instanceof TimeoutException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static String describe(Exception e) {
-        Throwable cause = e.getCause() != null ? e.getCause() : e;
+        Throwable cause = e;
+        while (cause.getCause() != null) {
+            cause = cause.getCause();
+        }
         return cause.getMessage() != null
                 ? cause.getClass().getSimpleName() + ": " + cause.getMessage()
                 : cause.getClass().getSimpleName();

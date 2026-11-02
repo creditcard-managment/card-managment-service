@@ -273,10 +273,10 @@ docker exec -it card-management-kafka kafka-console-consumer \
 | Aspecto | Comportamiento actual |
 |---|---|
 | Atomicidad DB ↔ Kafka | En card-data, garantizada con transactional outbox: el evento se confirma junto con la tarjeta y el relay lo publica hasta lograrlo. payment-processing sigue publicando dentro de la transacción, sin outbox. |
-| Entrega al broker | *At-least-once*: `acks=all` + idempotencia del productor + reintentos del relay. Si la instancia cae entre el envío y el commit, el evento se vuelve a publicar con el mismo `eventId`. |
+| Entrega al broker | *At-least-once*: `acks=all` + idempotencia del productor + reintentos del relay. Un evento puede llegar dos veces con el mismo `eventId`: si la instancia cae entre el envío y el commit, o si un envío ya estaba en vuelo cuando el productor lo dio por vencido y el broker lo escribe igual (ocurre con cortes del broker). |
 | Orden | Por tarjeta en `card.created` (key `cardId`). Sin orden por transacción en `payment.*` (key `eventId`). |
 | Procesamiento en el consumidor | Pensado como *at-least-once* (ack manual), pero ver más abajo. |
-| Idempotencia del consumidor | No hay. Un mensaje reprocesado duplica la transición `CREATE`. `eventId` permitiría deduplicar. |
+| Idempotencia del consumidor | card-lifecycle descarta duplicados de `card.created`: cada tarjeta tiene una sola transición `CREATE` (verificación previa + índice único `uq_state_transitions_create`). |
 | Errores en el consumidor | Se loguean y no se hace ack. Como la excepción no se relanza, no hay reintento inmediato ni DLQ. Si después se procesa bien un mensaje posterior de la misma partición, su ack confirma también el offset del fallido y este se pierde. |
 | Versionado de esquema | No hay campo de versión. `eventType` es el nombre de la clase Java, así que renombrar una clase rompe a los consumidores. |
 | Zona horaria | `occurredOn` y demás fechas son `LocalDateTime` sin offset: dependen de la zona del servidor productor. |
@@ -299,8 +299,8 @@ docker exec -it card-management-kafka kafka-console-consumer \
 1. **Solo `card.created` está implementado de punta a punta.** Aprobar, emitir, activar, bloquear y cancelar no publican eventos, aunque los contratos (`CardApprovedEvent`, `CardIssuedEvent`, `CardActivatedEvent`, `CardBlockedEvent`) y los topics ya existen. El resto del sistema no se entera de los cambios de estado.
 2. **Archivos vacíos en la librería:** seis clases de evento y `EventSerializationConfig` tienen 0 bytes. `card-data` también tiene sus propias clases vacías `CardBlockedEvent`, `CardUnblockedEvent` y `PINResetEvent` en `domain/event`, que se confunden con las de la librería.
 3. **Doble camino de publicación en card-data:** `CreateCardService` publica `card.created` directamente, sin pasar por el outbox. No lo usa ningún controller, pero si se usara, publicaría eventos de tarjetas que podrían no haberse persistido.
-4. **Sin DLQ:** los topics `dlq.*` están reservados pero no hay `DeadLetterPublishingRecoverer` ni ningún otro mecanismo que los use. En el outbox de card-data, un evento que nunca se puede publicar bloquea a los siguientes (no hay límite de intentos).
-5. **Consumidor sin reintentos reales ni idempotencia** (ver §8).
+4. **Sin DLQ en los consumidores:** los topics `dlq.*` están reservados pero no hay `DeadLetterPublishingRecoverer` ni ningún otro mecanismo que los use. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
+5. **Consumidor sin reintentos reales** (ver §8): un mensaje que falla puede perderse si después se confirma uno posterior.
 6. **Eventos de pago sin consumidores**, con key `eventId` (el comentario del código dice “to ensure ordering”, pero una key única por evento no ordena nada), y `RefundProcessed` y `FraudDetected` nunca se emiten.
 7. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
 8. **Replication factor 2 con un solo broker:** `KafkaPaymentConfig` declara los topics de pago con `replicas=2`, que el broker único del compose no puede satisfacer. La creación por `KafkaAdmin` falla; los topics terminan creándose por auto-creación con la configuración por defecto.

@@ -315,6 +315,8 @@ sequenceDiagram
 
 - El valor se recibe como `String` (`StringDeserializer`) y se deserializa a mano con un `ObjectMapper` con soporte de `java.time`.
 - `enable.auto.commit=false`, `AckMode.MANUAL`, concurrencia 1, `auto-offset-reset=earliest`, `max.poll.records=100`.
+- **Idempotente:** card-data publica con un outbox *at-least-once*, así que el mismo evento puede llegar más de una vez. Si la tarjeta ya tiene su transición `CREATE`, el mensaje se confirma sin registrarla de nuevo. El índice único `uq_state_transitions_create` (V10) cubre además el caso de dos consumos en paralelo.
+- El `eventId` del mensaje se guarda en `metadata` (`{"eventId":"…"}`).
 - Si el procesamiento falla, la excepción se loguea y **no se hace ack** (ver §9 sobre el efecto real).
 
 ### 5.2 Aprobación → emisión → activación
@@ -384,7 +386,7 @@ La regla “no se activa una tarjeta sin límite de crédito” está implementa
 | `transitioned_at` | `timestamp` | no | `@CreationTimestamp` |
 | `successful` | `boolean` | no | default `true` |
 | `error_message` | `text` | sí | |
-| `metadata` | `text` | sí | Reservado para JSON adicional; hoy siempre `null` |
+| `metadata` | `text` | sí | JSON adicional; en `CREATE`, el `eventId` del mensaje |
 
 Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, solo fallidas, última transición, conteo, existencia, por evento y por estado destino. El endpoint solo expone el historial completo.
 
@@ -461,9 +463,9 @@ Comportamientos actuales del código que conviene resolver:
 8. **Sin desbloqueo.** No hay endpoint ni implementación de `UnblockCardUseCase`, aunque está previsto en la state machine y en el dominio.
 9. **Ports sin implementar:** `RejectCardUseCase`, `BlockCardUseCase`, `CancelCardUseCase`, `UnblockCardUseCase` y `GetLifecycleHistoryUseCase` son interfaces sin implementación (el controller usa `CardLifecycleService` directamente). `CardDataClient` existe, pero los servicios dependen de la clase concreta `CardDataRestClient`.
 10. **Consistencia entre servicios.** Emisión y activación hacen 2 llamadas REST seguidas: si la segunda falla, `card-data` queda a medio actualizar y no hay compensación. Si falla el guardado de la transición después de las llamadas, el cambio en `card-data` ya está hecho y no queda historial. `RestTemplate` no tiene timeouts.
-11. **Manejo del consumidor Kafka.** Al fallar no hace ack, pero tampoco relanza la excepción, así que el `DefaultErrorHandler` no actúa. El mensaje solo se reprocesa si el consumidor se reinicia antes de confirmar un offset posterior; si después llega un mensaje correcto, su ack confirma también el offset del fallido y el fallido se pierde. Tampoco hay idempotencia: un reenvío duplica la transición `CREATE`.
+11. **Manejo del consumidor Kafka.** Al fallar no hace ack, pero tampoco relanza la excepción, así que el `DefaultErrorHandler` no actúa. El mensaje solo se reprocesa si el consumidor se reinicia antes de confirmar un offset posterior; si después llega un mensaje correcto, su ack confirma también el offset del fallido y el fallido se pierde.
 12. **Errores HTTP poco precisos.** Sin `@RestControllerAdvice`, una transición inválida o una tarjeta inexistente devuelven 500 en lugar de 409/422 o 404. `InvalidStateTransitionException` está definida pero no se usa.
 13. **docker-compose incompleto.** Faltan `CARD_DATA_BASE_URL` (por ejemplo `http://card-data-service:8081`) y `SPRING_KAFKA_BOOTSTRAP_SERVERS`, y no hay `depends_on`, así que dentro del contenedor los defaults apuntan a `localhost`. `ENCRYPTION_KEY` no corresponde a ninguna propiedad leída.
-14. **Código muerto:** `hashPin()` en el controller, `StateTransitionResponse` (declara un package que no coincide con su carpeta), `LifecycleDtoMapper.toIssueCardCommand` y su record interno, `application/dto/response/LifecycleHistoryResponse` (duplicado del DTO REST), `TransitionContext`, `StateMachineActionConfig` (vacío) y las propiedades `card-lifecycle.*` del perfil.
+14. **Código muerto:** `hashPin()` en el controller, `LifecycleDtoMapper.toIssueCardCommand` y su record interno, `application/dto/response/LifecycleHistoryResponse` (duplicado del DTO REST), `TransitionContext`, `StateMachineActionConfig` (vacío) y las propiedades `card-lifecycle.*` del perfil.
 15. **Sin tests.** El módulo no tiene `src/test`, aunque `spring-statemachine-test` está declarado en el `pom.xml`.
 16. **Sin autenticación.** `performedBy` es un campo libre del request; la auditoría no está ligada a una identidad verificada.
