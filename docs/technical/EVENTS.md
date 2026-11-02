@@ -297,14 +297,13 @@ docker exec -it card-management-kafka kafka-console-consumer \
 ## 10. Limitaciones conocidas y deuda técnica
 
 1. **Solo `card.created` está implementado de punta a punta.** Aprobar, emitir, activar, bloquear y cancelar no publican eventos, aunque los contratos (`CardApprovedEvent`, `CardIssuedEvent`, `CardActivatedEvent`, `CardBlockedEvent`) y los topics ya existen. El resto del sistema no se entera de los cambios de estado.
-2. **Archivos vacíos en la librería:** seis clases de evento y `EventSerializationConfig` tienen 0 bytes. `card-data` también tiene sus propias clases vacías `CardBlockedEvent`, `CardUnblockedEvent` y `PINResetEvent` en `domain/event`, que se confunden con las de la librería.
-3. **Doble camino de publicación en card-data:** `CreateCardService` publica `card.created` directamente, sin pasar por el outbox. No lo usa ningún controller, pero si se usara, publicaría eventos de tarjetas que podrían no haberse persistido.
-4. **Sin DLQ en los consumidores:** los topics `dlq.*` están reservados pero no hay `DeadLetterPublishingRecoverer` ni ningún otro mecanismo que los use. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
-5. **Consumidor sin reintentos reales** (ver §8): un mensaje que falla puede perderse si después se confirma uno posterior.
-6. **Eventos de pago sin consumidores**, con key `eventId` (el comentario del código dice “to ensure ordering”, pero una key única por evento no ordena nada), y `RefundProcessed` y `FraudDetected` nunca se emiten.
-7. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
-8. **Replication factor 2 con un solo broker:** `KafkaPaymentConfig` declara los topics de pago con `replicas=2`, que el broker único del compose no puede satisfacer. La creación por `KafkaAdmin` falla; los topics terminan creándose por auto-creación con la configuración por defecto.
-9. **Convenciones mezcladas:** `KafkaTopics.TRANSACTION_*` (`transaction.authorized`) no coincide con los topics que realmente usa `payment-processing` (`payment.processing.authorized`); los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados.
-10. **Bootstrap en Docker:** el compose no define `SPRING_KAFKA_BOOTSTRAP_SERVERS` para `card-data-service` ni para `card-lifecycle-service`, así que dentro de los contenedores apuntan a `localhost:9092` en lugar de `kafka:9092`. `payment-processing` sí lo resuelve, mediante el placeholder `${KAFKA_BOOTSTRAP_SERVERS}`.
-11. **Configuración ignorada en card-lifecycle:** las propiedades de deserialización del `application.yml` no se aplican (ver §5.2).
-12. **Sin tests de contrato** (serialización y deserialización ida y vuelta) en la librería.
+2. **Archivos vacíos en la librería:** seis clases de evento y `EventSerializationConfig` tienen 0 bytes.
+3. **Sin DLQ en los consumidores:** los topics `dlq.*` están reservados pero no hay `DeadLetterPublishingRecoverer` ni ningún otro mecanismo que los use. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
+4. **Consumidor sin reintentos reales** (ver §8): un mensaje que falla puede perderse si después se confirma uno posterior.
+5. **Eventos de pago sin consumidores**, con key `eventId` (el comentario del código dice “to ensure ordering”, pero una key única por evento no ordena nada), y `RefundProcessed` y `FraudDetected` nunca se emiten.
+6. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
+7. **Replication factor 2 con un solo broker:** `KafkaPaymentConfig` declara los topics de pago con `replicas=2`, que el broker único del compose no puede satisfacer. La creación por `KafkaAdmin` falla; los topics terminan creándose por auto-creación con la configuración por defecto.
+8. **Convenciones mezcladas:** `KafkaTopics.TRANSACTION_*` (`transaction.authorized`) no coincide con los topics que realmente usa `payment-processing` (`payment.processing.authorized`); los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados.
+9. **Bootstrap en Docker:** el compose no define `SPRING_KAFKA_BOOTSTRAP_SERVERS` para `card-data-service` ni para `card-lifecycle-service`, así que dentro de los contenedores apuntan a `localhost:9092` en lugar de `kafka:9092`. `payment-processing` sí lo resuelve, mediante el placeholder `${KAFKA_BOOTSTRAP_SERVERS}`.
+10. **Configuración ignorada en card-lifecycle:** las propiedades de deserialización del `application.yml` no se aplican (ver §5.2).
+11. **Sin tests de contrato** (serialización y deserialización ida y vuelta) en la librería.

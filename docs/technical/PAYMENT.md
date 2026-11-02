@@ -374,8 +374,8 @@ Campos: `cardId`, `cardNumberToken`, `lastFourDigits`, `expirationDate`, `amount
 
 | Puerto | Llamada | URL por defecto (`services.*`) | ¿Existe el destino? |
 |---|---|---|---|
-| `CardValidationPort` | `GET /api/v1/cards/{cardId}/status` | `CARD_DATA_SERVICE_URL` = `http://localhost:8080` | **No**: card-data escucha en `8081` y solo tiene `PUT /status`; para leer el estado está `GET /api/v1/cards/{id}` |
-| `CreditLimitPort` | `GET /api/v1/credit-limits/{cardId}/available`, `POST …/reserve`, `…/consume`, `…/release`, `…/restore` | `CARD_LIMITS_SERVICE_URL` = `http://localhost:8080` | **No** (ver [LIMITS.md §9.1](LIMITS.md)) |
+| `CardValidationPort` | `GET /api/v1/cards/{cardId}/status` | `CARD_DATA_SERVICE_URL` = `http://localhost:8081` | **No**: card-data solo tiene `PUT /status`; para leer el estado está `GET /api/v1/cards/{id}` |
+| `CreditLimitPort` | `GET /api/v1/credit-limits/{cardId}/available`, `POST …/reserve`, `…/consume`, `…/release`, `…/restore` | `CARD_LIMITS_SERVICE_URL` = `http://localhost:8082` | **No** (ver [LIMITS.md §9.1](LIMITS.md)) |
 | `MerchantValidationPort` | `GET /api/v1/merchants/{id}/status` | `MERCHANT_SERVICE_URL` = `http://localhost:8080` | No hay servicio de comercios en el repo |
 | `FraudCheckPort` | `/api/v1/fraud/*` | `FRAUD_DETECTION_SERVICE_URL` = `http://localhost:8081` | No existe (`8081` es card-data) |
 | `AuthorizationPort` | `/api/v1/authorization/*` | `AUTHORIZATION_SERVICE_URL` = `http://localhost:8082` | No existe (`8082` es card-limits); simulado por defecto |
@@ -463,7 +463,7 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 ### 9.3 Docker
 
-`services/payment-processing/Dockerfile` (multi-stage) y servicio `payment-processing-service` en compose: perfil `payment`, puerto `8085`, `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`, `depends_on: kafka`. **No define** las URLs `services.*`, que quedan en sus defaults de `localhost`.
+`services/payment-processing/Dockerfile` (multi-stage) y servicio `payment-processing-service` en compose: perfil `payment`, puerto `8085`, `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`, `depends_on: kafka`, `CARD_DATA_SERVICE_URL=http://card-data-service:8081` y `CARD_LIMITS_SERVICE_URL=http://card-limits-service:8082`. Las URLs de comercios, antifraude y autorizador quedan en sus defaults de `localhost`.
 
 ---
 
@@ -494,11 +494,11 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 14. **Eventos antes del commit:** se publican dentro de `@Transactional`. Si el commit falla, ya salieron eventos de una transacción inexistente. No hay outbox.
 15. **Key Kafka = `eventId`:** no hay orden por transacción ni por tarjeta. Replication factor 2 con un broker en compose. Nadie consume estos topics.
-16. **Puertos y URLs por defecto cruzados:** todos los `services.*` apuntan a `localhost:8080/8081/8082`, que no corresponden a los servicios correctos, y compose no los define.
+16. **URLs por defecto cruzadas:** comercios, antifraude y autorizador apuntan a `localhost:8080`, `8081` y `8082`, que son payment-processing, card-data y card-limits. Ninguno de esos servicios existe en el repo.
 17. **Base de datos distinta por defecto** (`card_management` vs `card_management_db`).
 18. **Configuración sin efecto:** Flyway, `fraud.velocity.*`, `spring.application.name: card-management-service` (nombre del proyecto padre, no del servicio).
 19. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `RefundProcessed`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
 20. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
 21. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
-22. **Seguridad:** sin autenticación; el token del PAN lo provee el cliente (no hay servicio de tokenización); el PIN viaja en claro en el request.
+22. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
 23. **Sin tests:** no existe `src/test`, aunque el `pom.xml` configura JaCoCo.
