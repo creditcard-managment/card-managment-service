@@ -456,27 +456,26 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
    - `POST /api/v1/credit-limits/{cardId}/restore`
 
    Ninguna de esas rutas existe, usan `cardId` donde `card-limits` espera `creditLimitId`, y la URL por defecto es `localhost:8080` en lugar de `8082`. Como el adapter captura el error y devuelve un disponible de `0 USD`, las consultas de fondos de los pagos dan siempre sin saldo.
-2. ~~**`CardJpaEntity` sin constructor vacío.**~~ *Resuelto:* se volvió a agregar `@NoArgsConstructor` junto a `@Builder` y `@AllArgsConstructor`, así que JPA puede instanciar la entidad. `deleted` queda en `false` por defecto con los dos constructores.
-3. **Sin control de concurrencia.** `CreditLimitEntity` no tiene `@Version` y el flujo es leer → modificar → guardar. Dos consumos simultáneos sobre el mismo límite pueden pisarse (*lost update*) y permitir gastar más que el disponible.
-4. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda termina en `IllegalArgumentException` (“Cannot operate on different currencies”) y responde 500.
+2. **Sin control de concurrencia.** `CreditLimitEntity` no tiene `@Version` y el flujo es leer → modificar → guardar. Dos consumos simultáneos sobre el mismo límite pueden pisarse (*lost update*) y permitir gastar más que el disponible.
+3. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda termina en `IllegalArgumentException` (“Cannot operate on different currencies”) y responde 500.
 
 ### 9.2 Reglas de negocio
 
-5. **Adelantos no acumulativos.** No se registra cuánto se usó en adelantos: cada adelanto se compara contra el tope completo, así que varios adelantos pueden superarlo en total.
-6. **Liberar más de lo consumido da 500.** `releaseCredit` no valida que el pago sea ≤ consumido. El dominio lo deja pasar, pero el `CHECK chk_consumed_not_negative` de la migración V2 rechaza el `UPDATE` y el cliente recibe un 500 genérico en lugar de un 422 con un motivo claro.
-7. **Asignaciones bajas fallan.** Con el 30% por defecto, cualquier límite de compras menor a ARS 1.666,67 da un tope de adelantos menor al mínimo de ARS 500 y la asignación se rechaza. Tampoco se puede asignar sin adelantos: `0` se convierte en 30%.
-8. **No se valida el estado de la tarjeta al consumir ni al validar.** Una tarjeta bloqueada, cancelada o vencida puede seguir consumiendo crédito.
-9. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor, y no se valida diario ≤ mensual.
-10. **Sin reserva (hold).** Validar y consumir son operaciones separadas: no hay reserva de fondos ni confirmación posterior.
-11. **Sin registro de movimientos ni idempotencia.** Consumos y liberaciones no dejan historial (`description` se descarta) ni reciben un id de transacción para evitar duplicados.
+4. **Adelantos no acumulativos.** No se registra cuánto se usó en adelantos: cada adelanto se compara contra el tope completo, así que varios adelantos pueden superarlo en total.
+5. **Liberar más de lo consumido da 500.** `releaseCredit` no valida que el pago sea ≤ consumido. El dominio lo deja pasar, pero el `CHECK chk_consumed_not_negative` de la migración V2 rechaza el `UPDATE` y el cliente recibe un 500 genérico en lugar de un 422 con un motivo claro.
+6. **Asignaciones bajas fallan.** Con el 30% por defecto, cualquier límite de compras menor a ARS 1.666,67 da un tope de adelantos menor al mínimo de ARS 500 y la asignación se rechaza. Tampoco se puede asignar sin adelantos: `0` se convierte en 30%.
+7. **No se valida el estado de la tarjeta al consumir ni al validar.** Una tarjeta bloqueada, cancelada o vencida puede seguir consumiendo crédito.
+8. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor, y no se valida diario ≤ mensual.
+9. **Sin reserva (hold).** Validar y consumir son operaciones separadas: no hay reserva de fondos ni confirmación posterior.
+10. **Sin registro de movimientos ni idempotencia.** Consumos y liberaciones no dejan historial (`description` se descarta) ni reciben un id de transacción para evitar duplicados.
 
 ### 9.3 Técnicas
 
-12. **Configuración ignorada:** `credit-limits.*` del perfil y las propiedades MySQL del DataSource.
-13. **Archivos vacíos:** `domain/event/*` (3), `domain/exception/*` (3), `application/config/CreditLimitUseCaseConfig` y `infrastructure/config/CreditLimitJpaConfig` tienen 0 bytes.
-14. **DTO ajeno:** `infrastructure/adapter/input/rest/dto/LifecycleHistoryResponse.java` es una copia del DTO de `card-lifecycle`, con el package de `card-lifecycle`.
-15. **Dos endpoints de asignación** (`POST /` y `POST /cards/{cardId}`) con reglas distintas para el `cardId`.
-16. **`CreditLimitManagementService` se declara dos veces:** con `@Service` y como `@Bean` en `CreditLimitUseCaseConfig`. Lo mismo pasa con `CreditValidationService`.
-17. **Sin eventos:** no publica `credit-limit.assigned`, `credit-limit.consumed`, etc., aunque los topics existen en `card-events` ([EVENTS.md §3](EVENTS.md)).
-18. **Sin tests:** no hay `src/test`, aunque `pom.xml` declara JUnit, Mockito y Testcontainers.
-19. **Sin autenticación:** `assignedBy` y `changedBy` son texto libre del request.
+11. **Configuración ignorada:** `credit-limits.*` del perfil y las propiedades MySQL del DataSource.
+12. **Archivos vacíos:** `domain/event/*` (3), `domain/exception/*` (3), `application/config/CreditLimitUseCaseConfig` y `infrastructure/config/CreditLimitJpaConfig` tienen 0 bytes.
+13. **DTO ajeno:** `infrastructure/adapter/input/rest/dto/LifecycleHistoryResponse.java` es una copia del DTO de `card-lifecycle`, con el package de `card-lifecycle`.
+14. **Dos endpoints de asignación** (`POST /` y `POST /cards/{cardId}`) con reglas distintas para el `cardId`.
+15. **`CreditLimitManagementService` se declara dos veces:** con `@Service` y como `@Bean` en `CreditLimitUseCaseConfig`. Lo mismo pasa con `CreditValidationService`.
+16. **Sin eventos:** no publica `credit-limit.assigned`, `credit-limit.consumed`, etc., aunque los topics existen en `card-events` ([EVENTS.md §3](EVENTS.md)).
+17. **Sin tests:** no hay `src/test`, aunque `pom.xml` declara JUnit, Mockito y Testcontainers.
+18. **Sin autenticación:** `assignedBy` y `changedBy` son texto libre del request.

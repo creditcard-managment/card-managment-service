@@ -163,26 +163,26 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 sequenceDiagram
     participant API as card-data CardController
     participant S as CardManagementService
-    participant TX as Transacción JPA
-    participant L as CardEventListener
-    participant P as KafkaEventPublisher
+    participant DB as PostgreSQL (cards + outbox_events)
+    participant O as OutboxRelay
     participant K as Kafka card.created
     participant C as card-lifecycle CardEventConsumer
-    participant DB as state_transitions
+    participant H as state_transitions
 
     API->>S: execute(CreateCardCommand)
-    S->>TX: save(card)
-    S->>S: publishEvent(CardCreatedDomainEvent)
-    TX-->>L: AFTER_COMMIT
-    L->>P: publish("card.created", cardId, CardCreatedEvent)
-    P->>K: send (asíncrono)
+    S->>DB: INSERT cards + INSERT outbox_events (misma transacción)
+    loop cada poll-interval-ms
+        O->>DB: SELECT pendientes FOR UPDATE SKIP LOCKED
+        O->>K: send (key = cardId), espera ack
+        O->>DB: published_at = now()
+    end
     K->>C: poll
     C->>C: ObjectMapper.readValue(json, CardCreatedEvent)
-    C->>DB: INSERT (null → REQUESTED, CREATE)
+    C->>H: INSERT (null → REQUESTED, CREATE)
     C->>K: acknowledge()
 ```
 
-1. **Evento interno → evento de integración.** `card-data` publica primero un evento de Spring (`CardCreatedDomainEvent`, que lleva el aggregate completo). Un `@TransactionalEventListener(AFTER_COMMIT)` lo traduce a `CardCreatedEvent` y lo envía a Kafka. Así nunca se publica una tarjeta que no llegó a persistirse.
+1. **Transactional outbox.** `card-data` guarda la tarjeta y el `CardCreatedEvent` serializado (tabla `outbox_events`) en la misma transacción, a través de `EventOutboxPort`. `OutboxRelay` publica los pendientes en orden y los marca como publicados cuando el broker confirma. Si Kafka no responde, el evento queda pendiente y se reintenta; no se pierde. Detalle en [DATA.md §5.1](DATA.md).
 2. **Key del mensaje = `cardId`.** Todos los eventos de una misma tarjeta caen en la misma partición y conservan el orden.
 3. **Consumo.** `card-lifecycle` registra la transición inicial en su historial. Ver [LIFECYCLE.md §5.1](LIFECYCLE.md).
 
@@ -197,7 +197,8 @@ sequenceDiagram
 | `enable.idempotence` | `true` |
 | `max.in.flight.requests.per.connection` | 5 |
 | Compresión / batching | `snappy`, `linger.ms=10`, `batch.size=16384` |
-| Envío | `publish()` asíncrono (solo loguea el resultado); `publishSync()` disponible, lanza `EventPublishingException` |
+| Timeouts | `request.timeout.ms=5000`, `delivery.timeout.ms=10000`, `max.block.ms=5000` (acotados por debajo de la espera del relay, para que un envío fallido no se entregue más tarde y se duplique) |
+| Envío | `OutboxRelay`: síncrono por evento (`send(...).get(send-timeout-ms)`), en orden de inserción |
 
 ### 5.2 Configuración del consumidor (card-lifecycle)
 
@@ -271,8 +272,8 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 | Aspecto | Comportamiento actual |
 |---|---|
-| Atomicidad DB ↔ Kafka | No garantizada. Se publica después del commit; si Kafka falla, el evento se pierde (no hay outbox ni reintento posterior). |
-| Entrega al broker | `acks=all` + idempotencia + 3 reintentos del productor. |
+| Atomicidad DB ↔ Kafka | En card-data, garantizada con transactional outbox: el evento se confirma junto con la tarjeta y el relay lo publica hasta lograrlo. payment-processing sigue publicando dentro de la transacción, sin outbox. |
+| Entrega al broker | *At-least-once*: `acks=all` + idempotencia del productor + reintentos del relay. Si la instancia cae entre el envío y el commit, el evento se vuelve a publicar con el mismo `eventId`. |
 | Orden | Por tarjeta en `card.created` (key `cardId`). Sin orden por transacción en `payment.*` (key `eventId`). |
 | Procesamiento en el consumidor | Pensado como *at-least-once* (ack manual), pero ver más abajo. |
 | Idempotencia del consumidor | No hay. Un mensaje reprocesado duplica la transición `CREATE`. `eventId` permitiría deduplicar. |
@@ -287,7 +288,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 1. Crear la clase en `com.unisono.card.events.domain`, extendiendo `DomainEvent`, con campos `final` de tipos simples (`String`, números, `LocalDateTime`). No incluir datos sensibles (PAN, CVV, PIN).
 2. Agregar dos constructores: uno `@JsonCreator` con `@JsonProperty` para todos los campos, incluidos `eventId` y `occurredOn` (llama a `super(eventId, occurredOn)`), y otro de negocio que llame a `super()`.
 3. Agregar el nombre del topic a `KafkaTopics` siguiendo la convención `<dominio>.<hecho>`.
-4. En el productor, publicar **después del commit** y usar como key el id del aggregate (por ejemplo `cardId`) para preservar el orden.
+4. En el productor, encolarlo con `EventOutboxPort.enqueue(topic, aggregateId, event)` dentro de la transacción del caso de uso (en card-data; los demás servicios todavía no tienen outbox). El id del aggregate es la key del mensaje y preserva el orden.
 5. En el consumidor, hacer el ack solo tras procesar con éxito y manejar duplicados con `eventId`.
 6. Documentar el evento en este archivo (§3 y §4).
 
@@ -297,8 +298,8 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 1. **Solo `card.created` está implementado de punta a punta.** Aprobar, emitir, activar, bloquear y cancelar no publican eventos, aunque los contratos (`CardApprovedEvent`, `CardIssuedEvent`, `CardActivatedEvent`, `CardBlockedEvent`) y los topics ya existen. El resto del sistema no se entera de los cambios de estado.
 2. **Archivos vacíos en la librería:** seis clases de evento y `EventSerializationConfig` tienen 0 bytes. `card-data` también tiene sus propias clases vacías `CardBlockedEvent`, `CardUnblockedEvent` y `PINResetEvent` en `domain/event`, que se confunden con las de la librería.
-3. **Doble camino de publicación en card-data:** `CreateCardService` publica `card.created` directamente, dentro de la transacción (antes del commit). No lo usa ningún controller, pero si se usara, publicaría eventos de tarjetas que podrían no haberse persistido.
-4. **Sin outbox ni DLQ:** los topics `dlq.*` están reservados pero no hay `DeadLetterPublishingRecoverer` ni ningún otro mecanismo que los use.
+3. **Doble camino de publicación en card-data:** `CreateCardService` publica `card.created` directamente, sin pasar por el outbox. No lo usa ningún controller, pero si se usara, publicaría eventos de tarjetas que podrían no haberse persistido.
+4. **Sin DLQ:** los topics `dlq.*` están reservados pero no hay `DeadLetterPublishingRecoverer` ni ningún otro mecanismo que los use. En el outbox de card-data, un evento que nunca se puede publicar bloquea a los siguientes (no hay límite de intentos).
 5. **Consumidor sin reintentos reales ni idempotencia** (ver §8).
 6. **Eventos de pago sin consumidores**, con key `eventId` (el comentario del código dice “to ensure ordering”, pero una key única por evento no ordena nada), y `RefundProcessed` y `FraudDetected` nunca se emiten.
 7. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
