@@ -111,7 +111,7 @@ com.unisono.card.limits
 | `DailyLimit` | Monto (por defecto **ARS 100.000**), consumido y `resetDate`. Si `resetDate ≠ hoy`, el disponible es el monto completo y el próximo consumo reinicia el contador. |
 | `MonthlyLimit` | Igual que el diario, con `resetMonth` (`YearMonth`). Por defecto **ARS 500.000**. |
 
-Todos operan sobre `Money` (`card-shared`): montos con escala 2 y `HALF_UP`. **Sumar, restar o comparar montos de distinta moneda lanza `IllegalArgumentException`.**
+Todos operan sobre `Money` (`card-shared`): montos con escala 2 y `HALF_UP`. **Sumar, restar o comparar montos de distinta moneda lanza `BusinessRuleException` (422).**
 
 ### 3.3 Operaciones del aggregate
 
@@ -285,10 +285,10 @@ Mismo formato que `card-data`:
 | Excepción | HTTP | Casos típicos |
 |---|---|---|
 | `NotFoundException` | 404 | Límite o tarjeta inexistente |
-| `ValidationException` | 400 | Montos fuera de rango en los VO, monto cero |
+| `ValidationException` (incluye `InvalidValueObjectException`) | 400 | Montos fuera de rango en los VO, monto cero, moneda inválida |
 | `MethodArgumentNotValidException` | 400 + `fieldErrors` | Bean Validation |
-| `BusinessRuleException` | 422 | Tarjeta no elegible, límite duplicado, crédito insuficiente, límite diario o mensual excedido, reducción por debajo de lo consumido |
-| Otras (incluida `IllegalArgumentException` por monedas distintas) | 500 | — |
+| `BusinessRuleException` | 422 | Monedas distintas, tarjeta no elegible, límite duplicado, crédito insuficiente, límite diario o mensual excedido, reducción por debajo de lo consumido |
+| Otras | 500 | — |
 
 > Las anotaciones OpenAPI de los endpoints de consumo dicen “400 crédito insuficiente”, pero el código devuelve **422**.
 
@@ -457,7 +457,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 
    Ninguna de esas rutas existe, y usan `cardId` donde `card-limits` espera `creditLimitId`. Como el adapter captura el error y devuelve un disponible de `0 USD`, las consultas de fondos de los pagos dan siempre sin saldo.
 2. **Sin control de concurrencia.** `CreditLimitEntity` no tiene `@Version` y el flujo es leer → modificar → guardar. Dos consumos simultáneos sobre el mismo límite pueden pisarse (*lost update*) y permitir gastar más que el disponible.
-3. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda termina en `IllegalArgumentException` (“Cannot operate on different currencies”) y responde 500.
+3. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda se rechaza con 422 (“Cannot operate on different currencies”).
 
 ### 9.2 Reglas de negocio
 

@@ -339,6 +339,8 @@ Campos: `cardId`, `cardNumberToken`, `lastFourDigits`, `expirationDate`, `amount
 | `AuthorizationFailedException` | 402 | `AUTHORIZATION_FAILED` (response codes `51`, `59`, `62`, `03`) |
 | `FraudDetectedException` | 403 | `FRAUD_DETECTED` |
 | `MerchantValidationException` | 400 | `MERCHANT_VALIDATION_FAILED` |
+| `ValidationException` de `card-shared` (incluye `InvalidValueObjectException`, p. ej. `expirationDate` mal formado o moneda inválida) | 400 | `INVALID_VALUE` |
+| `BusinessRuleException` de `card-shared` (p. ej. monedas distintas en `Money`) | 422 | `BUSINESS_RULE_VIOLATION` |
 | Otra `PaymentException` | 500 | `PAYMENT_ERROR` |
 | Cualquier otra | 500 | `INTERNAL_ERROR` |
 

@@ -1,6 +1,6 @@
 package com.unisono.card.shared.domain.valueobject;
 
-import com.unisono.card.shared.domain.exception.ValidationException;
+import com.unisono.card.shared.domain.exception.InvalidValueObjectException;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 
@@ -18,6 +18,7 @@ public class Percentage implements Serializable, Comparable<Percentage> {
 
     private static final long serialVersionUID = 1L;
     private static final int SCALE = 4; // 4 decimales para precisión
+    private static final BigDecimal ONE_HUNDRED = BigDecimal.valueOf(100);
 
     private final BigDecimal value; // Almacenado como decimal (ej: 0.15 = 15%)
 
@@ -29,7 +30,7 @@ public class Percentage implements Serializable, Comparable<Percentage> {
      * Crea un Percentage a partir de un valor decimal (0.15 = 15%)
      */
     public static Percentage of(BigDecimal value) {
-        validate(value);
+        validate(value, BigDecimal.ONE);
         return new Percentage(value);
     }
 
@@ -37,8 +38,8 @@ public class Percentage implements Serializable, Comparable<Percentage> {
      * Crea un Percentage a partir de un porcentaje (15 = 15%)
      */
     public static Percentage fromPercentage(BigDecimal percentage) {
-        validate(percentage);
-        return new Percentage(percentage.divide(BigDecimal.valueOf(100), SCALE, RoundingMode.HALF_UP));
+        validate(percentage, ONE_HUNDRED);
+        return new Percentage(percentage.divide(ONE_HUNDRED, SCALE, RoundingMode.HALF_UP));
     }
 
     /**
@@ -52,15 +53,15 @@ public class Percentage implements Serializable, Comparable<Percentage> {
         return of(BigDecimal.ZERO);
     }
 
-    private static void validate(BigDecimal value) {
+    private static void validate(BigDecimal value, BigDecimal max) {
         if (value == null) {
-            throw new ValidationException("El porcentaje no puede ser nulo");
+            throw new InvalidValueObjectException("El porcentaje no puede ser nulo");
         }
         if (value.compareTo(BigDecimal.ZERO) < 0) {
-            throw new ValidationException("El porcentaje no puede ser negativo");
+            throw new InvalidValueObjectException("El porcentaje no puede ser negativo");
         }
-        if (value.compareTo(BigDecimal.ONE) > 0) {
-            throw new ValidationException("El porcentaje no puede ser mayor a 100%");
+        if (value.compareTo(max) > 0) {
+            throw new InvalidValueObjectException("El porcentaje no puede ser mayor a 100%");
         }
     }
 

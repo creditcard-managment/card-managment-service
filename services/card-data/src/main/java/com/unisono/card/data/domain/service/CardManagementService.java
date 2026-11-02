@@ -9,7 +9,6 @@ import com.unisono.card.data.domain.port.output.EventOutboxPort;
 import com.unisono.card.events.config.KafkaTopics;
 import com.unisono.card.events.domain.CardCreatedEvent;
 import com.unisono.card.shared.domain.exception.NotFoundException;
-import com.unisono.card.shared.domain.exception.ValidationException;
 import com.unisono.card.shared.domain.valueobject.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -149,24 +148,16 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase,
 
         Card card = getCardOrThrow(cardId);
 
-        // Crear Value Objects (ValidationException si el formato es inválido)
+        // Crear Value Objects (InvalidValueObjectException si el formato es inválido)
         CardNumber cardNumberVO = CardNumber.of(cardNumber);
         CVV cvvVO = CVV.of(cvv);
         PIN pinVO = PIN.of(pin);
-        ExpirationDate expirationDate = toExpirationDate(expirationMonth, expirationYear);
+        ExpirationDate expirationDate = ExpirationDate.forIssuance(expirationMonth, expirationYear);
 
         card.updateCardData(cardNumberVO, cvvVO, pinVO, expirationDate);
 
         cardRepository.save(card);
 
         log.info("Datos de tarjeta actualizados exitosamente");
-    }
-
-    private ExpirationDate toExpirationDate(int month, int year) {
-        try {
-            return ExpirationDate.of(month, year);
-        } catch (IllegalArgumentException e) {
-            throw new ValidationException(e.getMessage());
-        }
     }
 }

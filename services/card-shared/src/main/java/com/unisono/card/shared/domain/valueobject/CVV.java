@@ -1,7 +1,7 @@
 package com.unisono.card.shared.domain.valueobject;
 
 
-import com.unisono.card.shared.domain.exception.ValidationException;
+import com.unisono.card.shared.domain.exception.InvalidValueObjectException;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
@@ -34,15 +34,15 @@ public class CVV implements Serializable {
 
     private static void validate(String value) {
         if (StringUtils.isBlank(value)) {
-            throw new ValidationException("El CVV no puede ser nulo o vacío");
+            throw new InvalidValueObjectException("El CVV no puede ser nulo o vacío");
         }
 
         if (!value.matches("\\d+")) {
-            throw new ValidationException("El CVV debe contener solo dígitos");
+            throw new InvalidValueObjectException("El CVV debe contener solo dígitos");
         }
 
         if (value.length() != CVV_LENGTH && value.length() != CVV_AMEX_LENGTH) {
-            throw new ValidationException(
+            throw new InvalidValueObjectException(
                     String.format("El CVV debe tener %d o %d dígitos", CVV_LENGTH, CVV_AMEX_LENGTH)
             );
         }

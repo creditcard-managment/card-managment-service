@@ -3,6 +3,8 @@ package com.unisono.card.payment.infrastructure.adapter.input.rest;
 import com.unisono.card.payment.application.dto.response.ErrorResponse;
 import com.unisono.card.payment.application.mapper.ErrorMapper;
 import com.unisono.card.payment.domain.exception.*;
+import com.unisono.card.shared.domain.exception.BusinessRuleException;
+import com.unisono.card.shared.domain.exception.ValidationException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -196,6 +198,42 @@ public class GlobalExceptionHandler {
                 request.getDescription(false)
         );
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+
+    /**
+     * Handle invalid input data (Value Objects de card-shared)
+     */
+    @ExceptionHandler(ValidationException.class)
+    public ResponseEntity<ErrorResponse> handleDomainValidation(
+            ValidationException ex, WebRequest request) {
+
+        log.warn("Invalid value: {}", ex.getMessage());
+
+        ErrorResponse error = errorMapper.toErrorResponse(
+                "INVALID_VALUE",
+                ex.getMessage(),
+                "The request contains an invalid value",
+                request.getDescription(false)
+        );
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle business rule violations (ej: monedas distintas)
+     */
+    @ExceptionHandler(BusinessRuleException.class)
+    public ResponseEntity<ErrorResponse> handleBusinessRule(
+            BusinessRuleException ex, WebRequest request) {
+
+        log.warn("Business rule violated: {}", ex.getMessage());
+
+        ErrorResponse error = errorMapper.toErrorResponse(
+                "BUSINESS_RULE_VIOLATION",
+                ex.getMessage(),
+                "The operation violates a business rule",
+                request.getDescription(false)
+        );
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(error);
     }
 
     /**
