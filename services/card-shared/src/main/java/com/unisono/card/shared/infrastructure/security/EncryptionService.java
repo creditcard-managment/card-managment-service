@@ -2,31 +2,21 @@ package com.unisono.card.shared.infrastructure.security;
 
 /**
  * Servicio de encriptación para datos sensibles.
- * Implementación usa AES-256.
+ * Implementación usa AES-256-GCM con claves versionadas.
  */
 public interface EncryptionService {
 
     /**
-     * Encripta un texto plano
+     * Encripta un texto plano con la clave activa
      * @param plainText texto a encriptar
-     * @return texto encriptado en Base64
+     * @return "keyId:Base64(IV + ciphertext)"
      */
     String encrypt(String plainText);
 
     /**
-     * Desencripta un texto encriptado
-     * @param encryptedText texto encriptado en Base64
+     * Desencripta con la clave indicada en el prefijo (o la legacy si no tiene prefijo)
+     * @param encryptedText texto devuelto por encrypt
      * @return texto plano original
      */
     String decrypt(String encryptedText);
-
-    /**
-     * Encripta bytes
-     */
-    byte[] encrypt(byte[] plainBytes);
-
-    /**
-     * Desencripta bytes
-     */
-    byte[] decrypt(byte[] encryptedBytes);
 }

@@ -6,7 +6,9 @@ import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
 
 import java.io.Serializable;
+import java.util.Locale;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Value Object que representa el identificador único de una tarjeta.
@@ -18,6 +20,9 @@ public class CardId implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    private static final Pattern UUID_PATTERN = Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+
     private final String value;
 
     private CardId(String value) {
@@ -26,11 +31,11 @@ public class CardId implements Serializable {
 
     /**
      * Crea un CardId a partir de un String.
-     * Valida que no sea nulo ni vacío.
+     * Valida que sea un UUID en formato canónico (8-4-4-4-12) y lo normaliza a minúsculas.
      */
     public static CardId of(String value) {
         validate(value);
-        return new CardId(value);
+        return new CardId(value.toLowerCase(Locale.ROOT));
     }
 
 
@@ -44,6 +49,9 @@ public class CardId implements Serializable {
     private static void validate(String value) {
         if (StringUtils.isBlank(value)) {
             throw new InvalidValueObjectException("CardId no puede ser nulo o vacío");
+        }
+        if (!UUID_PATTERN.matcher(value).matches()) {
+            throw new InvalidValueObjectException("CardId debe ser un UUID válido: " + value);
         }
     }
 

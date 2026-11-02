@@ -426,7 +426,6 @@ Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, s
 | `spring.kafka.consumer.group-id` | `card-lifecycle-consumer-group` |
 | `spring.kafka.listener.ack-mode` | `manual` |
 | `card-data.base-url` | `http://localhost:8081` (default en `CardDataRestClient`) |
-| `encryption.secret-key` | `${ENCRYPTION_KEY}`, por defecto una clave de desarrollo |
 
 El perfil `card-lifecycle` (`application-card-lifecycle.yml`, activado por docker-compose) agrega logging a `logs/card-lifecycle.log`, Prometheus, SpringDoc y endpoints de actuator. Las propiedades `card-lifecycle.transitions.*` (timeout, reintentos) y `card-lifecycle.audit.*` (retención) están declaradas pero **ningún código las lee**.
 

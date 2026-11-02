@@ -9,7 +9,7 @@
 | Dependencias | `spring-boot-starter`, `spring-boot-starter-validation`, `spring-security-crypto`, `commons-lang3`, `bcprov-jdk18on`, `jackson-databind`, `lombok` |
 | Paquetes | `…shared.domain.valueobject`, `…shared.domain.exception`, `…shared.infrastructure.security`, `…shared.infrastructure.config` |
 | Usada por | `card-data`, `card-lifecycle`, `card-limits`, `payment-processing` |
-| Tests | `CardStatusTest`, `ExpirationDateTest`, `MoneyTest`, `PercentageTest`, `ValueObjectValidationTest` |
+| Tests | 8 clases: value objects (`CardStatus`, `CardId`, `CardNumber`, `ExpirationDate`, `Money`, `Percentage`, validación común) y `AesEncryptionService` |
 
 ---
 
@@ -70,10 +70,10 @@ Identificador de tarjeta.
 | Método | Comportamiento |
 |---|---|
 | `CardId.generate()` | UUID v4 aleatorio como `String` |
-| `CardId.of(String)` | Acepta cualquier valor **no vacío** (no valida formato UUID) |
+| `CardId.of(String)` | Exige un **UUID en formato canónico** (`8-4-4-4-12` hex) y lo normaliza a minúsculas |
 | `getValue()` / `toString()` | El valor como `String` |
 
-Error: `InvalidValueObjectException("CardId no puede ser nulo o vacío")`.
+Errores: `InvalidValueObjectException` si es vacío o no es un UUID (`"card-123"`, sin guiones, con espacios). En los endpoints de card-data y card-limits, un id inválido responde **400** en lugar de 404.
 
 ### 2.2 `ClientId`
 
@@ -98,8 +98,8 @@ Métodos de presentación:
 | Método | Resultado |
 |---|---|
 | `getLastFourDigits()` | `"9010"` |
-| `getMasked()` | `"**** **** **** 9010"` |
-| `getBIN()` | Primeros 6 dígitos (`"453212"`) |
+| `getMasked()` | Todos los dígitos salvo los últimos 4 como `*`, agrupados de a 4 desde la derecha: `"* **** **** 2222"` (13), `"*** **** **** 0005"` (15), `"**** **** **** 9010"` (16), `"*** **** **** **** 0001"` (19) |
+| `getBIN()` | BIN/IIN: primeros 6 dígitos, identifican al emisor (`"453212"`) |
 | `toString()` | Igual que `getMasked()`: **nunca** expone el PAN completo en logs |
 
 > El PAN en claro solo vive en memoria; en BD se guarda cifrado con `EncryptionService` (ver §4.1).
@@ -287,36 +287,53 @@ Cada servicio tiene su propio `GlobalExceptionHandler`; `card-shared` no define 
 
 ## 4. Servicios de seguridad
 
-Ambos son `@Service` en `com.unisono.card.shared.infrastructure.security`; `card-shared` no trae clases `@Configuration`. Se registran en los módulos que incluyen `com.unisono.card.shared` en su `@ComponentScan`: `card-data`, `card-lifecycle` y `card-limits`. `payment-processing` no los escanea ni los usa. Hoy solo `card-data` los inyecta (`CardEncryptionAdapter`, `CardEntityMapper`).
+Ambos son `@Service` en `com.unisono.card.shared.infrastructure.security`, junto con `EncryptionProperties` (`@ConfigurationProperties("encryption")`). Se registran solo en los módulos que incluyen `com.unisono.card.shared` en su `@ComponentScan`. Hoy es únicamente `card-data`, el único que los usa (`CardEncryptionAdapter`, `CardEntityMapper`). `card-lifecycle`, `card-limits` y `payment-processing` no los escanean ni necesitan configurar claves.
 
 ### 4.1 `EncryptionService` → `AesEncryptionService`
 
-Cifrado simétrico **AES-256-GCM** para PAN y CVV.
+Cifrado simétrico **AES-256-GCM** para PAN y CVV, con un **llavero de claves versionadas**.
 
 | Aspecto | Valor |
 |---|---|
 | Algoritmo | `AES/GCM/NoPadding` (JCE estándar) |
 | IV | 12 bytes aleatorios (`SecureRandom`), **nuevo por cada cifrado** |
 | Tag de autenticación | 128 bits (detecta alteración del ciphertext) |
-| Formato de salida | `Base64( IV ‖ ciphertext+tag )` en una sola cadena |
-| Clave | Propiedad `encryption.secret-key`; los bytes UTF-8 deben medir **exactamente 32**, si no la app no arranca (`IllegalArgumentException`) |
-| Errores | `EncryptionException` (unchecked), p. ej. clave distinta a la usada al cifrar |
+| Formato de salida | `keyId:Base64( IV ‖ ciphertext+tag )`, p. ej. `k1:Abc…==` |
+| Claves | Base64 de **32 bytes aleatorios** (`openssl rand -base64 32`), no derivadas de un texto |
+| Errores al descifrar | `EncryptionException` (unchecked): clave desconocida, material de clave distinto, ciphertext alterado o mal formado |
 | `null` o `""` | `encrypt`/`decrypt` devuelven `null` |
 
-API: `encrypt(String)`, `decrypt(String)` (Base64) y sus variantes con `byte[]`.
+API: `encrypt(String)` (siempre con la clave activa) y `decrypt(String)` (con la clave que indica el prefijo).
 
 Como el IV es aleatorio, **cifrar dos veces el mismo PAN da resultados distintos**: no se puede buscar una tarjeta comparando el PAN cifrado.
 
-**Configuración de la clave:**
+**Configuración** (`EncryptionProperties`, prefijo `encryption`):
 
-| Origen | Valor |
-|---|---|
-| Variable de entorno | `ENCRYPTION_KEY` (definida en `deploy/docker/docker-compose.yml` para los 4 servicios) |
-| `application.yml` de card-data / card-limits | `encryption.secret-key: "${ENCRYPTION_KEY:MySecretKey32BytesForAES256!!123}"` |
-| `application.yml` de card-lifecycle | `encryption.secret-key: "${ENCRYPTION_KEY:SecretKey32CharsForEncryption!!!}"` |
-| Default en el código | `MySecretKey32BytesForAES256!!123` |
+```yaml
+encryption:
+  active-key-id: "${ENCRYPTION_ACTIVE_KEY_ID:k1}"   # clave con la que se cifra
+  keys:
+    k1: "${ENCRYPTION_KEY_K1:<Base64 dev>}"        # una entrada por versión de clave
+  legacy-secret-key: "${ENCRYPTION_KEY:<32 caracteres>}"  # opcional, datos sin prefijo
+```
 
-> ⚠️ Cambiar la clave vuelve ilegibles los PAN/CVV ya guardados: no hay versionado de claves ni re-cifrado. Al iniciar, el servicio loguea un `WARN` recordando usar un KMS en producción.
+- **Validación al arrancar (fail fast).** El servicio no arranca si:
+  - falta `active-key-id` o no existe en `keys`;
+  - una clave no es Base64 o no mide 32 bytes;
+  - un id no cumple `[A-Za-z0-9_-]{1,32}`;
+  - la clave legacy no mide 32 bytes.
+- **Sin defaults en el código:** los valores de desarrollo están solo en el `application.yml` de card-data y en `docker-compose.yml`.
+
+**Rotación de clave:**
+
+1. Generar una clave nueva y agregarla como `encryption.keys.k2`.
+2. Apuntar `encryption.active-key-id` a `k2`, manteniendo `k1`.
+3. Desde ese momento todo se cifra con `k2`. Lo guardado con `k1` se sigue leyendo, y pasa a `k2` cuando la tarjeta se vuelve a guardar (`CardRepositoryAdapter` cifra el PAN y el CVV en cada `save`).
+4. Retirar `k1` solo cuando ningún registro la use: `SELECT count(*) FROM cards WHERE card_number_encrypted LIKE 'k1:%' OR cvv_encrypted LIKE 'k1:%'`.
+
+**Datos anteriores al llavero:** el formato viejo es Base64 sin prefijo, con la clave tomada de los bytes UTF-8 de un texto de 32 caracteres. Esos datos se descifran con `legacy-secret-key` y migran a la clave activa al volver a guardarse. Como Base64 no usa `:`, la ausencia de prefijo identifica el formato sin ambigüedad.
+
+> Al iniciar, el servicio loguea la clave activa y los ids configurados (nunca el material), y un `WARN` recordando usar un KMS en producción.
 
 ### 4.2 `HashingService` → `BCryptHashingService`
 
@@ -343,13 +360,13 @@ Se verifica siempre con `verify()`, nunca comparando hashes: el salt hace que do
    </dependency>
    ```
 
-2. Si se necesitan `EncryptionService` o `HashingService`, incluir el paquete en el escaneo:
+2. Solo si se necesitan `EncryptionService` o `HashingService`, incluir el paquete en el escaneo:
 
    ```java
    @ComponentScan(basePackages = {"com.unisono.card.<modulo>", "com.unisono.card.shared"})
    ```
 
-   …y definir `encryption.secret-key` (32 bytes), idealmente desde `ENCRYPTION_KEY`.
+   …y configurar `encryption.active-key-id` y `encryption.keys.*` (§4.1); sin eso el módulo no arranca. Si no se necesitan, no escanear `com.unisono.card.shared`: los VO y las excepciones se usan como clases comunes, sin Spring.
 
 3. Mapear en el `GlobalExceptionHandler` del módulo al menos `NotFoundException` (404), `ValidationException` (400, cubre `InvalidValueObjectException`) y `BusinessRuleException` (422), para mantener la misma semántica HTTP que `card-data`.
 
@@ -370,17 +387,19 @@ mvn -pl services/card-shared test
 | `MoneyTest` | Redondeo, operaciones, monedas distintas (422), monto o moneda inválidos, división por cero |
 | `PercentageTest` | `fromPercentage` (0–100), `of` (0–1), `applyTo` |
 | `ValueObjectValidationTest` | Todos los VO lanzan `InvalidValueObjectException`, que es un `ValidationException` |
+| `CardIdTest` | UUID canónico, normalización a minúsculas, rechazo de ids no UUID |
+| `CardNumberTest` | Enmascarado para 13, 15, 16 y 19 dígitos, sanitización, BIN, Luhn y longitudes inválidas |
+| `AesEncryptionServiceTest` | Ida y vuelta con prefijo, IV aleatorio, rotación, datos legacy, clave desconocida o cambiada, ciphertext alterado, validaciones de configuración |
 
-No hay tests de `CardNumber` (Luhn), `PIN` ni de los servicios de cifrado y hashing.
+No hay tests de las reglas de `PIN` ni de `BCryptHashingService`.
 
 ---
 
 ## 7. Limitaciones conocidas y deuda técnica
 
-1. **Clave de cifrado sin gestión.** Se toman los bytes de un `String` sin KDF ni KMS. No hay identificador de versión en el ciphertext, así que no se puede rotar la clave. Los defaults difieren entre módulos (card-lifecycle usa otro) y existe un default embebido en el código.
-2. **`CardNumber.getMasked()` asume 16 dígitos.** Siempre devuelve `"**** **** **** NNNN"`, aunque el PAN tenga 13–19. El Javadoc de `getBIN()` dice que "determina el tipo de tarjeta", pero solo devuelve el prefijo.
-3. **`CardId.of` no valida formato UUID**: acepta cualquier cadena no vacía.
-4. **`Percentage` sin uso.** `card-limits` modela `cashAdvancePercentage` como `Double`.
-5. **Tests incompletos.** Faltan tests de `CardNumber` (Luhn), de las reglas de `PIN` y del ida y vuelta de `AesEncryptionService` (incluido el fallo con clave incorrecta).
-6. **README desactualizado.** `services/card-shared/README.md` describe tests inexistentes (cobertura > 90 %), una estructura de archivos y un `application-card-shared.yml` que no existen, y tiene bloques de código mal cerrados.
-7. **Dependencias sin uso.** `spring-boot-starter-validation` y `bcprov-jdk18on` (Bouncy Castle) no se usan: el cifrado va por el proveedor JCE estándar.
+1. **Sin KMS.** Las claves llegan por configuración (variables de entorno). Integrar un KMS o Vault queda para la infraestructura externa.
+2. **Sin job de re-cifrado.** Una tarjeta pasa a la clave activa solo cuando se vuelve a guardar. Para retirar una clave vieja (o la legacy) hay que esperar a que se re-guarden todas, o re-guardarlas a mano.
+3. **`Percentage` sin uso.** `card-limits` modela `cashAdvancePercentage` como `Double`.
+4. **Tests incompletos.** Faltan tests de las reglas de `PIN` y de `BCryptHashingService`.
+5. **README desactualizado.** `services/card-shared/README.md` describe tests inexistentes (cobertura > 90 %), una estructura de archivos y un `application-card-shared.yml` que no existen, y tiene bloques de código mal cerrados.
+6. **Dependencias sin uso.** `spring-boot-starter-validation` y `bcprov-jdk18on` (Bouncy Castle) no se usan: el cifrado va por el proveedor JCE estándar.
