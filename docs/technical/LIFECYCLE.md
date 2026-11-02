@@ -430,7 +430,7 @@ El perfil `card-lifecycle` (`application-card-lifecycle.yml`, activado por docke
 
 ### 8.2 Docker
 
-- `card-lifecycle/Dockerfile`: build multi-stage con contexto en la raíz del repo, igual que el resto de los módulos.
+- `services/card-lifecycle/Dockerfile`: build multi-stage con contexto en la raíz del repo, igual que el resto de los módulos.
 - `deploy/docker/docker-compose.yml`: servicio `card-lifecycle-service`, puerto `8083`, perfil `card-lifecycle`, healthcheck sobre `/actuator/health`.
 
 ```bash

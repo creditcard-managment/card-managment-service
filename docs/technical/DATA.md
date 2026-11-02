@@ -472,7 +472,7 @@ El perfil `card-data` (`application-card-data.yml`) agrega logging a archivo (`l
 
 ### 9.2 Docker
 
-- `card-data/Dockerfile`: build multi-stage (Maven 3.9.6 + Temurin 17 → `eclipse-temurin:17-jre-alpine`), usuario no root, `JAVA_OPTS` con G1GC y `MaxRAMPercentage=75`. El contexto de build es la raíz del repo.
+- `services/card-data/Dockerfile`: build multi-stage (Maven 3.9.6 + Temurin 17 → `eclipse-temurin:17-jre-alpine`), usuario no root, `JAVA_OPTS` con G1GC y `MaxRAMPercentage=75`. El contexto de build es la raíz del repo.
 - `deploy/docker/docker-compose.yml`: servicio `card-data-service`, puerto `8081`, perfil `card-data`, conectado a `postgres` y Kafka en la red `card-network`.
 
 ```bash
@@ -503,4 +503,4 @@ Comportamientos actuales del código que conviene tener presentes:
 10. **El esquema vive en otro repo.** Las migraciones están en `card-management-database` y no se versionan con el código: cualquier cambio en `CardEntity` requiere una migración nueva allá. Las diferencias que provocaban errores (`INFINITE`, longitudes de `holder_address` y `block_reason`) se corrigen con la V8 (§6.1.1).
 11. **Sin autenticación/autorización** en la API, incluidos los endpoints que modifican datos sensibles.
 12. **Tests**: solo `CardTest` y `CardManagementServiceTest`; no hay tests de controllers, de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`.
-13. `card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.
+13. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.

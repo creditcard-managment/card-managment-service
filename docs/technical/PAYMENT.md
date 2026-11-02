@@ -463,7 +463,7 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 ### 9.3 Docker
 
-`payment-processing/Dockerfile` (multi-stage) y servicio `payment-processing-service` en compose: perfil `payment`, puerto `8085`, `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`, `depends_on: kafka`. **No define** las URLs `services.*`, que quedan en sus defaults de `localhost`.
+`services/payment-processing/Dockerfile` (multi-stage) y servicio `payment-processing-service` en compose: perfil `payment`, puerto `8085`, `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`, `depends_on: kafka`. **No define** las URLs `services.*`, que quedan en sus defaults de `localhost`.
 
 ---
 

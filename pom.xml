@@ -64,12 +64,12 @@
 
     <!-- MÓDULOS -->
     <modules>
-        <module>card-shared</module>
-        <module>card-events</module>
-        <module>card-data</module>
-        <module>card-limits</module>
-        <module>card-lifecycle</module>
-        <module>payment-processing</module>
+        <module>services/card-shared</module>
+        <module>services/card-events</module>
+        <module>services/card-data</module>
+        <module>services/card-limits</module>
+        <module>services/card-lifecycle</module>
+        <module>services/payment-processing</module>
     </modules>
 
     <!-- DEPENDENCY MANAGEMENT (versiones centralizadas) -->

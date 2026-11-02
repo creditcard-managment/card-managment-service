@@ -88,8 +88,8 @@ services:
 
   card-data-service:
     build:
-      context: .
-      dockerfile: card-data/Dockerfile
+      context: ../..
+      dockerfile: services/card-data/Dockerfile
     container_name: card-data-service
     environment:
       SPRING_PROFILES_ACTIVE: card-data
@@ -113,8 +113,8 @@ services:
 
   card-limits-service:
     build:
-      context: .
-      dockerfile: card-limits/Dockerfile
+      context: ../..
+      dockerfile: services/card-limits/Dockerfile
     container_name: card-limits-service
     environment:
       SPRING_PROFILES_ACTIVE: card-limits
@@ -138,8 +138,8 @@ services:
 
   card-lifecycle-service:
     build:
-      context: .
-      dockerfile: card-lifecycle/Dockerfile
+      context: ../..
+      dockerfile: services/card-lifecycle/Dockerfile
     container_name: card-lifecycle-service
     environment:
       SPRING_PROFILES_ACTIVE: card-lifecycle
@@ -163,8 +163,8 @@ services:
 
   payment-processing:
     build:
-      context: .
-      dockerfile: payment-processing/Dockerfile
+      context: ../..
+      dockerfile: services/payment-processing/Dockerfile
     container_name: payment-processing-service
     environment:
       SPRING_PROFILES_ACTIVE: payment

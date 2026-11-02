@@ -419,7 +419,7 @@ El perfil `card-limits` (`application-card-limits.yml`, activado por docker-comp
 
 ### 7.2 Docker
 
-- `card-limits/Dockerfile`: build multi-stage con contexto en la raíz del repo.
+- `services/card-limits/Dockerfile`: build multi-stage con contexto en la raíz del repo.
 - `deploy/docker/docker-compose.yml`: servicio `card-limits-service`, puerto `8082`, perfil `card-limits`, healthcheck sobre `/actuator/health`.
 
 ```bash
