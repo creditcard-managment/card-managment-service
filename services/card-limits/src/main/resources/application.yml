@@ -26,10 +26,6 @@ spring:
 server:
   port: 8082  # ✅ Puerto diferente
 
-encryption:
-  # Variable ENCRYPTION_KEY (docker-compose). ⚠️ Definirla en producción: exactamente 32 caracteres
-  secret-key: "${ENCRYPTION_KEY:MySecretKey32BytesForAES256!!123}"
-
 management:
   endpoints:
     web:

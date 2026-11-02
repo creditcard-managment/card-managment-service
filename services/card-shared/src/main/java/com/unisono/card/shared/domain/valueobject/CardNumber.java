@@ -97,15 +97,29 @@ public class CardNumber implements Serializable {
     }
 
     /**
-     * Retorna el número enmascarado (ej: **** **** **** 1234)
+     * Retorna el número enmascarado: todos los dígitos salvo los últimos 4 como '*',
+     * agrupados de a 4 desde la derecha (16 dígitos: **** **** **** 1234,
+     * 15 dígitos: *** **** **** 1234, 19 dígitos: *** **** **** **** 1234)
      */
     public String getMasked() {
-        String lastFour = getLastFourDigits();
-        return "**** **** **** " + lastFour;
+        String masked = "*".repeat(value.length() - 4) + getLastFourDigits();
+
+        StringBuilder grouped = new StringBuilder();
+        int firstGroup = masked.length() % 4;
+        if (firstGroup > 0) {
+            grouped.append(masked, 0, firstGroup);
+        }
+        for (int i = firstGroup; i < masked.length(); i += 4) {
+            if (grouped.length() > 0) {
+                grouped.append(' ');
+            }
+            grouped.append(masked, i, i + 4);
+        }
+        return grouped.toString();
     }
 
     /**
-     * Determina el tipo de tarjeta por el BIN (primeros 6 dígitos)
+     * Retorna el BIN/IIN: los primeros 6 dígitos, que identifican al emisor
      */
     public String getBIN() {
         return value.substring(0, Math.min(6, value.length()));
