@@ -483,7 +483,7 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 
 - `acks=all`, idempotente, 3 reintentos, `snappy`, `linger.ms=10`, sin type headers.
 - Key = `eventId`.
-- `KafkaPaymentConfig` declara los 10 topics con **3 particiones y replication factor 2**.
+- `KafkaPaymentConfig` declara los 10 topics con **3 particiones** (`KAFKA_TOPIC_PARTITIONS`) y **replication factor 2** (`KAFKA_TOPIC_REPLICATION_FACTOR`). En docker-compose, con un solo broker, el factor es 1: si supera la cantidad de brokers, los topics no se crean al arrancar (`InvalidReplicationFactorException`).
 - El envío es asíncrono: un error del broker solo se loguea.
 
 ---
@@ -552,7 +552,7 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 4. **Consumo de crédito sin compensación:** card-limits se llama antes de `save()`. Si después falla el guardado o la publicación de eventos, el crédito queda consumido sin transacción que lo respalde. Lo mismo pasa con `restore-credit` en reversos y devoluciones. No hay saga ni reintento.
 5. **Eventos antes del commit:** se publican dentro de `@Transactional`. Si el commit falla, ya salieron eventos de una transacción inexistente. No hay outbox.
-6. **Key Kafka = `eventId`:** no hay orden por transacción ni por tarjeta. Replication factor 2 con un broker en compose. Nadie consume estos topics.
+6. **Key Kafka = `eventId`:** no hay orden por transacción ni por tarjeta. Nadie consume estos topics.
 7. **URLs por defecto cruzadas:** antifraude y autorizador apuntan a `localhost:8081` y `8082`, que son card-data y card-limits. Ninguno de esos servicios existe en el repo.
 8. **Base de datos distinta por defecto** (`card_management` vs `card_management_db`).
 9. **Configuración sin efecto:** Flyway, `fraud.velocity.*`, `spring.application.name: card-management-service` (nombre del proyecto padre, no del servicio).
