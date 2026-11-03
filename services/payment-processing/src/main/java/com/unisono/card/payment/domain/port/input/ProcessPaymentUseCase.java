@@ -20,9 +20,9 @@ public interface ProcessPaymentUseCase {
     Transaction processCashAdvance(ProcessCashAdvanceCommand command);
 
     /**
-     * Authorize a transaction (reserve funds)
+     * Pre-authorize a purchase: authorizes it and holds the credit, leaving it AUTHORIZED until captured
      */
-    Transaction authorizeTransaction(TransactionId transactionId);
+    Transaction preAuthorize(ProcessPaymentCommand command);
 
     /**
      * Capture a pre-authorized transaction

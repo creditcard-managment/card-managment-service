@@ -49,6 +49,6 @@ public class ProcessCashAdvanceCommand {
     private String country;
 
     @NotBlank(message = "PIN is required for cash advance")
-    @Pattern(regexp = "\\d{4,6}", message = "PIN must be 4-6 digits")
-    private String pin; // Encrypted PIN block
+    @Pattern(regexp = "\\d{4}", message = "PIN must be 4 digits")
+    private String pin; // Se verifica contra card-data (POST /cards/{id}/validate-pin)
 }

@@ -1,6 +1,7 @@
 package com.unisono.card.payment.infrastructure.adapter.output.card;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.unisono.card.payment.domain.exception.CardValidationException;
 import com.unisono.card.payment.domain.exception.ExternalServiceException;
 import com.unisono.card.payment.domain.port.output.CardValidationPort;
 import com.unisono.card.shared.domain.valueobject.CardId;
@@ -12,6 +13,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -57,6 +59,45 @@ public class CardValidationAdapter implements CardValidationPort {
         }
     }
 
+    @Override
+    public boolean validatePin(CardId cardId, String pin) {
+        return verify(cardId, "validate-pin", Map.of("pin", pin), "PIN");
+    }
+
+    @Override
+    public boolean validateCvv(CardId cardId, String cvv) {
+        return verify(cardId, "validate-cvv", Map.of("cvv", cvv), "CVV");
+    }
+
+    /**
+     * POST /api/v1/cards/{cardId}/{operation} → { "valid": true | false }
+     */
+    private boolean verify(CardId cardId, String operation, Map<String, String> body, String what) {
+        log.debug("Validating {} in card-data for card: {}", what, cardId);
+
+        String url = String.format("%s/api/v1/cards/%s/%s", cardDataServiceUrl, cardId.getValue(), operation);
+        try {
+            VerificationResponse response = restTemplate.postForObject(url, body, VerificationResponse.class);
+            if (response == null || response.getValid() == null) {
+                throw new ExternalServiceException(SERVICE,
+                        "empty " + what + " validation response for card " + cardId, null);
+            }
+            if (!response.getValid()) {
+                log.warn("Incorrect {} for card: {}", what, cardId);
+            }
+            return response.getValid();
+
+        } catch (HttpClientErrorException.NotFound ex) {
+            throw CardValidationException.notFound(cardId);
+        } catch (HttpClientErrorException.UnprocessableEntity ex) {
+            // card-data rechaza la validación sobre una tarjeta bloqueada
+            throw CardValidationException.blocked(cardId);
+        } catch (RestClientException ex) {
+            log.error("Error validating {} for {}: {}", what, cardId, ex.getMessage());
+            throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
+        }
+    }
+
     // ==================== Internal DTOs ====================
 
     /**
@@ -70,5 +111,15 @@ public class CardValidationAdapter implements CardValidationPort {
         private String status;
         private Boolean isBlocked;
         private Boolean isExpired;
+    }
+
+    /**
+     * Response of card-data's POST /api/v1/cards/{cardId}/validate-pin and /validate-cvv
+     */
+    @lombok.Data
+    @lombok.NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class VerificationResponse {
+        private Boolean valid;
     }
 }

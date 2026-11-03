@@ -28,6 +28,7 @@ public interface TransactionMapper {
      * Convert Transaction to TransactionResponse
      */
     @Mapping(target = "transactionId", expression = "java(transaction.getTransactionId().toString())")
+    @Mapping(target = "originalTransactionId", expression = "java(transaction.getOriginalTransactionId() != null ? transaction.getOriginalTransactionId().toString() : null)")
     @Mapping(target = "cardId", expression = "java(transaction.getCardId().toString())")
     @Mapping(target = "type", source = "type")
     @Mapping(target = "status", source = "status")

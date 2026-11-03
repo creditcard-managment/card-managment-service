@@ -23,9 +23,12 @@ public interface CreditLimitPort {
     void consumeCredit(CardId cardId, Money amount, TransactionType type, String description);
 
     /**
-     * Give credit back (reversal or refund)
+     * Undo the consumption of a reversed or refunded transaction: gives back the available credit and,
+     * if the original transaction is from the current day or month, the daily and monthly quota.
+     *
+     * @param originalTransactionDate date of the transaction that consumed the credit
      */
-    void releaseCredit(CardId cardId, Money amount, String description);
+    void restoreCredit(CardId cardId, Money amount, java.time.LocalDate originalTransactionDate, String description);
 
     record CreditCheck(boolean approved, String reason, Money available) {
     }

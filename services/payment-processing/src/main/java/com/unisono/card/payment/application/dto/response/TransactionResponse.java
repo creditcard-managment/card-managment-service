@@ -25,6 +25,7 @@ public class TransactionResponse {
 
     // Transaction basic info
     private String transactionId;
+    private String originalTransactionId; // Only for refunds
     private String cardId;
     private TransactionType type;
     private TransactionStatus status;

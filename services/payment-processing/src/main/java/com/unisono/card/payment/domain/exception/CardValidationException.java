@@ -38,6 +38,18 @@ public class CardValidationException extends PaymentException {
         return new CardValidationException(cardId, "CVV", "Invalid CVV");
     }
 
+    public static CardValidationException cvvRequired(CardId cardId) {
+        return new CardValidationException(cardId, "CVV", "CVV is required for card-not-present payments");
+    }
+
+    public static CardValidationException invalidPin(CardId cardId) {
+        return new CardValidationException(cardId, "PIN", "Incorrect PIN");
+    }
+
+    public static CardValidationException pinRequired(CardId cardId) {
+        return new CardValidationException(cardId, "PIN", "PIN is required");
+    }
+
     public static CardValidationException invalidStatus(CardId cardId, String status) {
         return new CardValidationException(cardId, "STATUS",
                 String.format("Card status '%s' is not valid for transactions", status));

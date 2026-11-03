@@ -120,11 +120,22 @@ fraud:
 authorization:
   timeout-ms: 3000
   simulate: ${SIMULATE_AUTHORIZATION:true}
+  # El simulador declina (61) montos mayores a este valor. Por defecto es el máximo que admite un pago
+  simulate-decline-above: ${SIMULATE_AUTHORIZATION_DECLINE_ABOVE:50000.00}
   retry:
     max-attempts: 3
     backoff-ms: 1000
 
 # Actuator Configuration
+# Pre-authorizations: las que no se capturan ni se reversan a tiempo se reversan solas
+payment:
+  pre-authorization:
+    expiration-hours: ${PRE_AUTHORIZATION_EXPIRATION_HOURS:168}  # 7 días
+    expiry:
+      enabled: ${PRE_AUTHORIZATION_EXPIRY_ENABLED:true}
+      initial-delay-ms: 60000
+      interval-ms: ${PRE_AUTHORIZATION_EXPIRY_INTERVAL_MS:900000}  # 15 minutos
+
 management:
   endpoints:
     web:

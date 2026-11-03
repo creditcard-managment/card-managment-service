@@ -1,5 +1,6 @@
 package com.unisono.card.payment.application.service;
 
+import com.unisono.card.payment.domain.exception.InvalidTransactionException;
 import com.unisono.card.payment.domain.exception.TransactionNotFoundException;
 import com.unisono.card.payment.domain.model.Transaction;
 import com.unisono.card.payment.domain.model.TransactionId;
@@ -35,12 +36,17 @@ public class TransactionReversalService implements ReverseTransactionUseCase {
         log.info("Reversing transaction: {}, reason: {}", transactionId, reason);
 
         try {
-            // 1. Load transaction
-            Transaction transaction = transactionRepository.findById(transactionId)
+            // 1. Load transaction locking it (serialized with refunds of the same transaction)
+            Transaction transaction = transactionRepository.findByIdForUpdate(transactionId)
                     .orElseThrow(() -> new TransactionNotFoundException(transactionId));
 
-            // 2. Validate transaction can be reversed
+            // 2. Validate transaction can be reversed. With refunds it cannot: reversing would give back
+            //    the full amount again; what is left is refunded instead
             validationService.validateCanReverse(transaction);
+            if (!transactionRepository.findRefundsOf(transactionId).isEmpty()) {
+                throw new InvalidTransactionException(transactionId,
+                        "Transaction has refunds and cannot be reversed; refund the remaining amount instead");
+            }
 
             // 3. Reverse through domain service
             paymentDomainService.reverseTransaction(transaction, reason);

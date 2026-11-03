@@ -9,7 +9,9 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -338,6 +340,40 @@ public class CreditLimit {
         this.consumedCredit = this.consumedCredit.release(paymentAmount);
         recalculateAvailableCredit();
         touch();
+    }
+
+    /**
+     * Deshace el consumo de una transacción reversada o devuelta.
+     * <p>
+     * A diferencia de {@link #releaseCredit} (pago del resumen), devuelve también el cupo diario y mensual
+     * cuando la transacción original es del día o del mes en curso. Lo consumido baja a lo sumo hasta cero:
+     * si la tarjeta ya pagó ese consumo, el excedente no se restaura (no se modela saldo a favor).
+     *
+     * @param amount       monto de la transacción reversada o devuelta
+     * @param originalDate fecha de la transacción original (la que consumió el cupo)
+     * @return el monto que no se pudo restaurar en lo consumido (cero si se restauró todo)
+     */
+    public Money restoreConsumption(Money amount, LocalDate originalDate) {
+        if (amount == null || amount.isZero() || amount.isNegative()) {
+            throw new ValidationException("El monto a restaurar debe ser mayor a cero");
+        }
+        if (originalDate == null) {
+            throw new ValidationException("La fecha de la transacción original es obligatoria");
+        }
+
+        Money consumed = this.consumedCredit.getAmount();
+        Money restorable = amount.isGreaterThan(consumed) ? consumed : amount;
+        Money notRestored = amount.subtract(restorable);
+
+        if (!restorable.isZero()) {
+            this.consumedCredit = this.consumedCredit.release(restorable);
+        }
+        this.dailyLimit = this.dailyLimit.restore(amount, originalDate);
+        this.monthlyLimit = this.monthlyLimit.restore(amount, YearMonth.from(originalDate));
+
+        recalculateAvailableCredit();
+        touch();
+        return notRestored;
     }
 
     // ========================================

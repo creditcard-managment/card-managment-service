@@ -26,6 +26,8 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 class CreditLimitAdapterTest {
 
+    private static final java.time.LocalDate ORIGINAL_DATE = java.time.LocalDate.of(2026, 11, 2);
+
     private static final String BASE = "http://card-limits";
     private static final CardId CARD_ID = CardId.of("550e8400-e29b-41d4-a716-446655440000");
     private static final String LIMIT_ID = "11111111-2222-4333-8444-555555555555";
@@ -130,15 +132,16 @@ class CreditLimitAdapterTest {
     }
 
     @Test
-    void shouldReleaseCreditAsPaymentAmount() {
+    void shouldRestoreCreditWithOriginalTransactionDate() {
         expectCreditLimitLookup();
-        server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/release-credit"))
-                .andExpect(jsonPath("$.paymentAmount").value(1500.00))
+        server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/restore-credit"))
+                .andExpect(jsonPath("$.amount").value(1500.00))
                 .andExpect(jsonPath("$.currency").value("ARS"))
+                .andExpect(jsonPath("$.originalTransactionDate").value("2026-11-02"))
                 .andExpect(jsonPath("$.description").value("Reversal"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
-        adapter.releaseCredit(CARD_ID, AMOUNT, "Reversal");
+        adapter.restoreCredit(CARD_ID, AMOUNT, ORIGINAL_DATE, "Reversal");
 
         server.verify();
     }
@@ -146,11 +149,11 @@ class CreditLimitAdapterTest {
     @Test
     void shouldTruncateLongDescriptions() {
         expectCreditLimitLookup();
-        server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/release-credit"))
+        server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/restore-credit"))
                 .andExpect(jsonPath("$.description").value("x".repeat(255)))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
-        adapter.releaseCredit(CARD_ID, AMOUNT, "x".repeat(300));
+        adapter.restoreCredit(CARD_ID, AMOUNT, ORIGINAL_DATE, "x".repeat(300));
 
         server.verify();
     }
@@ -160,7 +163,7 @@ class CreditLimitAdapterTest {
         server.expect(requestTo(BASE + "/api/v1/credit-limits/card/" + CARD_ID.getValue()))
                 .andRespond(withStatus(HttpStatus.NOT_FOUND));
 
-        assertThatThrownBy(() -> adapter.releaseCredit(CARD_ID, AMOUNT, "Reversal"))
+        assertThatThrownBy(() -> adapter.restoreCredit(CARD_ID, AMOUNT, ORIGINAL_DATE, "Reversal"))
                 .isInstanceOf(ExternalServiceException.class);
     }
 

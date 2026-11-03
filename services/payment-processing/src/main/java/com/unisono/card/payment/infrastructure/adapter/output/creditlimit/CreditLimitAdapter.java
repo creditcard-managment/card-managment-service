@@ -18,13 +18,14 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 /**
  * Adapter for managing credit limits via card-limits service
  *
  * - checkCredit: POST /api/v1/credit-limits/validate/purchase | cash-advance (disponible, diario y mensual)
  * - consumeCredit: POST /api/v1/credit-limits/{creditLimitId}/consume-purchase | consume-cash-advance
- * - releaseCredit: POST /api/v1/credit-limits/{creditLimitId}/release-credit
+ * - restoreCredit: POST /api/v1/credit-limits/{creditLimitId}/restore-credit
  *
  * The creditLimitId is resolved with GET /api/v1/credit-limits/card/{cardId}.
  */
@@ -102,19 +103,20 @@ public class CreditLimitAdapter implements CreditLimitPort {
     }
 
     @Override
-    public void releaseCredit(CardId cardId, Money amount, String description) {
-        log.debug("Releasing credit for card: {}, amount: {}", cardId, amount);
+    public void restoreCredit(CardId cardId, Money amount, LocalDate originalTransactionDate, String description) {
+        log.debug("Restoring credit for card: {}, amount: {}, original date: {}", cardId, amount, originalTransactionDate);
 
         String creditLimitId = findCreditLimitId(cardId);
-        String url = String.format("%s%s/%s/release-credit", cardLimitsServiceUrl, BASE_PATH, creditLimitId);
+        String url = String.format("%s%s/%s/restore-credit", cardLimitsServiceUrl, BASE_PATH, creditLimitId);
         try {
             restTemplate.postForObject(url,
-                    new ReleaseCreditRequest(amount.getAmount(), amount.getCurrencyCode(), truncate(description)),
+                    new RestoreCreditRequest(amount.getAmount(), amount.getCurrencyCode(),
+                            originalTransactionDate.toString(), truncate(description)),
                     Void.class);
-            log.info("Released credit for card {}: {}", cardId, amount);
+            log.info("Restored credit for card {}: {}", cardId, amount);
 
         } catch (RestClientException ex) {
-            log.error("Error releasing credit for {}: {}", cardId, ex.getMessage());
+            log.error("Error restoring credit for {}: {}", cardId, ex.getMessage());
             throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
         }
     }
@@ -179,9 +181,10 @@ public class CreditLimitAdapter implements CreditLimitPort {
 
     @lombok.Data
     @AllArgsConstructor
-    static class ReleaseCreditRequest {
-        private BigDecimal paymentAmount;
+    static class RestoreCreditRequest {
+        private BigDecimal amount;
         private String currency;
+        private String originalTransactionDate; // ISO yyyy-MM-dd
         private String description;
     }
 }

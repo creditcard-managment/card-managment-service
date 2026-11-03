@@ -68,7 +68,7 @@ public class ProcessPaymentCommand {
     private String terminalId;
     private String posEntryMode;
 
-    // CVV (only for validation, never stored)
+    // CVV: required for ONLINE and MANUAL, verified against card-data, never stored
     @Pattern(regexp = "\\d{3,4}", message = "CVV must be 3 or 4 digits")
     private String cvv;
 }

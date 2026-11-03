@@ -144,6 +144,14 @@ public class TransactionEntity {
     @Column(name = "reversal_reason", length = 500)
     private String reversalReason;
 
+    // ========== Refunds ==========
+
+    /**
+     * Refunded transaction (only for REFUND). FK to transactions(transaction_id), V11
+     */
+    @Column(name = "original_transaction_id")
+    private UUID originalTransactionId;
+
     // ========== Relationships ==========
 
     @OneToMany(

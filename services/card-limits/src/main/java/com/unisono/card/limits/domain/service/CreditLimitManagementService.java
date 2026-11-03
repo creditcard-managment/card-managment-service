@@ -262,6 +262,27 @@ public class CreditLimitManagementService implements
         return savedLimit;
     }
 
+    @Override
+    public CreditLimit restoreCredit(RestoreCreditCommand command) {
+        log.info("Restoring credit: {} - Amount: {} (original date {}) - {}",
+                command.creditLimitId(), command.amount(), command.originalTransactionDate(), command.description());
+
+        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
+
+        Money notRestored = creditLimit.restoreConsumption(command.amount(), command.originalTransactionDate());
+        if (!notRestored.isZero()) {
+            log.warn("Credit limit {}: {} not restored because it exceeds the consumed credit (already paid)",
+                    command.creditLimitId(), notRestored);
+        }
+
+        CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
+
+        log.info("Credit restored successfully. Available: {}",
+                savedLimit.getAvailableCredit().getAmount());
+
+        return savedLimit;
+    }
+
     // ========================================
     // GetCreditInfoUseCase
     // ========================================

@@ -33,6 +33,13 @@ public class AuthorizationAdapter implements AuthorizationPort {
     @Value("${authorization.simulate:true}")
     private Boolean simulateAuthorization;
 
+    /**
+     * The simulator declines (code 61) amounts strictly above this value. The default is the maximum
+     * amount a payment accepts, so every valid amount is approved; lower it to test declines.
+     */
+    @Value("${authorization.simulate-decline-above:50000.00}")
+    private BigDecimal simulateDeclineAbove = new BigDecimal("50000.00");
+
     @Override
     public AuthorizationCode requestAuthorization(Transaction transaction) {
         log.info("Requesting authorization for transaction: {}, amount: {}",
@@ -170,9 +177,9 @@ public class AuthorizationAdapter implements AuthorizationPort {
         // Simulate approval logic
         BigDecimal amount = transaction.getAmount().getEffectiveAmount().getAmount();
 
-        // Decline if amount is too high (for testing)
-        if (amount.compareTo(new BigDecimal("50000")) >= 0) {
-            log.info("Simulated authorization declined: amount too high");
+        // Decline if amount is above the configured threshold (for testing)
+        if (amount.compareTo(simulateDeclineAbove) > 0) {
+            log.info("Simulated authorization declined: amount {} above {}", amount, simulateDeclineAbove);
             return AuthorizationCode.declined("61"); // Exceeds withdrawal limit
         }
 

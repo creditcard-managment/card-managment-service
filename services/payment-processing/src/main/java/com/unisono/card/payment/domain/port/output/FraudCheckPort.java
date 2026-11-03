@@ -15,9 +15,10 @@ public interface FraudCheckPort {
     Integer calculateRiskScore(Transaction transaction);
 
     /**
-     * Check if transaction is suspicious
+     * Check if transaction is suspicious given its already calculated risk score.
+     * It does not recalculate the score, so the evaluated value is the one stored in the transaction.
      */
-    boolean isSuspicious(Transaction transaction);
+    boolean isSuspicious(Transaction transaction, int riskScore);
 
     /**
      * Check velocity rules (too many transactions in short time)

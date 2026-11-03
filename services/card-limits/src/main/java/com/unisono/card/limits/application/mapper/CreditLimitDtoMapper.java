@@ -108,6 +108,19 @@ public class CreditLimitDtoMapper {
         );
     }
 
+    public RecalculateAvailableCreditUseCase.RestoreCreditCommand toRestoreCommand(
+            String creditLimitId,
+            RestoreCreditRequest request
+    ) {
+        Money amount = Money.of(request.getAmount(), request.getCurrency());
+        return new RecalculateAvailableCreditUseCase.RestoreCreditCommand(
+                creditLimitId,
+                amount,
+                request.getOriginalTransactionDate(),
+                request.getDescription()
+        );
+    }
+
     public RecalculateAvailableCreditUseCase.ReleaseCreditCommand toReleaseCommand(
             String creditLimitId,
             ReleaseCreditRequest request

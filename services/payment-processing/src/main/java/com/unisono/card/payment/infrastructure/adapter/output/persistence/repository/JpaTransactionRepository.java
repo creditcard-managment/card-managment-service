@@ -2,7 +2,9 @@ package com.unisono.card.payment.infrastructure.adapter.output.persistence.repos
 
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.TransactionEntity;
 import com.unisono.card.payment.domain.model.TransactionStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -17,6 +19,28 @@ import java.util.UUID;
  */
 @Repository
 public interface JpaTransactionRepository extends JpaRepository<TransactionEntity, UUID> {
+
+    /**
+     * Load a transaction locking its row until the end of the transaction (refunds of the same original
+     * are serialized, so the refunded total is checked against committed data)
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM TransactionEntity t WHERE t.transactionId = :id")
+    Optional<TransactionEntity> findByIdForUpdate(@Param("id") UUID id);
+
+    /**
+     * Refunds of a transaction
+     */
+    List<TransactionEntity> findByOriginalTransactionIdOrderByTransactionDateAsc(UUID originalTransactionId);
+
+    /**
+     * Pre-authorizations (AUTHORIZED purchases) authorized before the threshold
+     */
+    @Query("SELECT t FROM TransactionEntity t " +
+            "WHERE t.transactionStatus = 'AUTHORIZED' AND t.transactionType = 'PURCHASE' " +
+            "AND COALESCE(t.authorizationDate, t.transactionDate) < :threshold " +
+            "ORDER BY t.transactionDate ASC")
+    List<TransactionEntity> findExpiredPreAuthorizations(@Param("threshold") LocalDateTime threshold);
 
     /**
      * Find all transactions for a specific card

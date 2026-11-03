@@ -25,7 +25,7 @@ flowchart LR
     CLM -->|JPA lectura cards<br/>estado de la tarjeta| DB[(PostgreSQL)]
     CLM -->|JPA credit_limits<br/>credit_limit_history| DB
     LC[card-lifecycle :8083] -.->|JPA lectura credit_limits<br/>¿tiene límite?| DB
-    PP[payment-processing :8085] -->|REST validate / consume<br/>release-credit| CLM
+    PP[payment-processing :8085] -->|REST validate / consume<br/>restore-credit| CLM
 ```
 
 - **Asigna** el límite a una tarjeta en estado `APPROVED` o `ISSUED`, antes de que se active.
@@ -36,7 +36,7 @@ flowchart LR
 > `payment-processing` usa la API tal como está:
 > - **Antes de autorizar:** `validate/purchase` o `validate/cash-advance`.
 > - **Al aprobar:** `consume-purchase` o `consume-cash-advance`.
-> - **En reversos y devoluciones:** `release-credit`.
+> - **En reversos y devoluciones:** `restore-credit`.
 >
 > Resuelve el `creditLimitId` con `GET /card/{cardId}` ([PAYMENT.md §7](PAYMENT.md)).
 
@@ -76,7 +76,7 @@ com.unisono.card.limits
 | `AssignCreditLimitUseCase` | `CreditLimitManagementService` | `POST /`, `POST /cards/{cardId}` |
 | `GetCreditInfoUseCase` | `CreditLimitManagementService` | `GET /{creditLimitId}`, `GET /card/{cardId}`, `GET /card/{cardId}/info`, `GET /{creditLimitId}/history` |
 | `UpdateCreditLimitUseCase` | `CreditLimitManagementService` | `PUT /{id}/increase-purchase-limit`, `/decrease-purchase-limit`, `/update-cash-advance-limit`, `/update-temporal-limits` |
-| `RecalculateAvailableCreditUseCase` | `CreditLimitManagementService` | `POST /{id}/consume-purchase`, `/consume-cash-advance`, `/release-credit` |
+| `RecalculateAvailableCreditUseCase` | `CreditLimitManagementService` | `POST /{id}/consume-purchase`, `/consume-cash-advance`, `/release-credit`, `/restore-credit` |
 | `ValidatePurchaseUseCase` | `CreditValidationService` | `POST /validate/purchase`, `POST /validate/cash-advance` |
 
 ---
@@ -129,7 +129,8 @@ Todos operan sobre `Money` (`card-shared`): montos con escala 2 y `HALF_UP`. **S
 | `updateDailyLimit(nuevo)` / `updateMonthlyLimit(nuevo)` | No nulo | Reemplaza el tope; conserva el consumo del período en curso | `INCREASED`/`DECREASED` (DAILY/MONTHLY) |
 | `consumeForPurchase(monto)` | > 0, ≤ límite de compras, ≤ disponible, ≤ disponible diario y mensual | Suma al consumido, al diario y al mensual | — |
 | `consumeForCashAdvance(monto)` | > 0, ≤ tope de adelantos, ≤ disponible, ≤ diario y mensual | Igual que la compra | — |
-| `releaseCredit(monto)` | > 0 | Resta del consumido y recalcula el disponible (no toca diario ni mensual) | — |
+| `releaseCredit(monto)` | > 0 | Pago del resumen: resta del consumido y recalcula el disponible (no toca diario ni mensual) | — |
+| `restoreConsumption(monto, fechaOriginal)` | > 0, fecha obligatoria | Reverso o devolución: resta del consumido (como mucho hasta cero) y recalcula el disponible. Si `fechaOriginal` es del día en curso, resta del acumulado diario; si es del mes en curso, del mensual. Devuelve el excedente que no se pudo restaurar | — |
 | `canPurchase(monto)` / `canCashAdvance(monto)` | Las mismas reglas, sin lanzar excepciones | `true` / `false` | — |
 
 ### 3.4 `CreditLimitHistory`
@@ -252,7 +253,8 @@ Los dos montos son opcionales (> 0 si se envían). Todos estos endpoints respond
 |---|---|---|
 | `POST /{creditLimitId}/consume-purchase` | `{ "amount": 5000.00, "currency": "ARS", "description": "Compra en Mercado Libre" }` | Consume crédito por una compra |
 | `POST /{creditLimitId}/consume-cash-advance` | ídem | Consume crédito por un adelanto |
-| `POST /{creditLimitId}/release-credit` | `{ "paymentAmount": 10000.00, "currency": "ARS", "description": "Pago de resumen" }` | Libera crédito |
+| `POST /{creditLimitId}/release-credit` | `{ "paymentAmount": 10000.00, "currency": "ARS", "description": "Pago de resumen" }` | Libera crédito (pago del resumen) |
+| `POST /{creditLimitId}/restore-credit` | `{ "amount": 1500.00, "currency": "ARS", "originalTransactionDate": "2026-11-03", "description": "Reverso de …" }` | Deshace un consumo (reverso o devolución): disponible y cupo diario y mensual del período de la transacción original. Si ya se pagó, el excedente no se restaura (se loguea) |
 
 Respuesta **200** `CreditLimitResponse`. `description` es obligatoria pero **no se guarda**. Las operaciones no son idempotentes: repetir el request consume dos veces.
 
@@ -444,7 +446,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 |---|---|---|
 | `card-data` | `card-limits` lee `cards.status` y `cards.deleted` | Funciona (acoplamiento por base compartida) |
 | `card-lifecycle` | Lee `credit_limits` por `card_id` para decidir si se puede activar | La regla existe pero el endpoint de activación no la usa ([LIFECYCLE.md §9](LIFECYCLE.md)); además esa consulta no filtra `deleted` |
-| `payment-processing` | Valida (`validate/*`), consume al aprobar (`consume-*`) y libera en reversos y devoluciones (`release-credit`) por REST | Funciona ([PAYMENT.md §7](PAYMENT.md)) |
+| `payment-processing` | Valida (`validate/*`), consume al aprobar (`consume-*`) y restaura en reversos y devoluciones (`restore-credit`) por REST | Funciona ([PAYMENT.md §7](PAYMENT.md)) |
 | `card-events` | Existen los topics `credit-limit.*` y clases vacías | `card-limits` no publica eventos |
 
 ---
@@ -465,7 +467,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 7. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor, y no se valida diario ≤ mensual.
 8. **Sin reserva (hold).** Validar y consumir son operaciones separadas: no hay reserva de fondos ni confirmación posterior.
 9. **Sin registro de movimientos ni idempotencia.** Consumos y liberaciones no dejan historial (`description` se descarta) ni reciben un id de transacción para evitar duplicados.
-10. **Liberar no devuelve el cupo diario ni el mensual.** `release-credit` modela el pago del resumen: sube el disponible y baja lo consumido, pero los acumulados del día y del mes quedan igual. Cuando `payment-processing` lo usa para un reverso o una devolución del mismo día, el cliente no recupera ese cupo diario.
+10. **Sin saldo a favor.** `restore-credit` baja lo consumido como mucho hasta cero. Si la tarjeta ya pagó el consumo que se devuelve, el excedente no se acredita y solo se loguea.
 
 ### 9.3 Técnicas
 
@@ -475,4 +477,4 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 14. **Dos endpoints de asignación** (`POST /` y `POST /cards/{cardId}`) con reglas distintas para el `cardId`.
 15. **`CreditLimitManagementService` se declara dos veces:** con `@Service` y como `@Bean` en `CreditLimitUseCaseConfig`. Lo mismo pasa con `CreditValidationService`.
 16. **Sin eventos:** no publica `credit-limit.assigned`, `credit-limit.consumed`, etc., aunque los topics existen en `card-events` ([EVENTS.md §3](EVENTS.md)).
-17. **Sin tests:** no hay `src/test`, aunque `pom.xml` declara JUnit, Mockito y Testcontainers.
+17. **Tests mínimos:** solo `CreditLimitRestoreTest` (dominio de `restoreConsumption`). No hay tests de servicios, endpoints ni persistencia, aunque `pom.xml` declara Mockito y Testcontainers.

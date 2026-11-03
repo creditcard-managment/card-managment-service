@@ -25,6 +25,11 @@ public interface RecalculateAvailableCreditUseCase {
      */
     CreditLimit releaseCredit(ReleaseCreditCommand command);
 
+    /**
+     * Deshace el consumo de una transacción reversada o devuelta (disponible, cupo diario y mensual)
+     */
+    CreditLimit restoreCredit(RestoreCreditCommand command);
+
     // ========================================
     // Commands
     // ========================================
@@ -32,6 +37,13 @@ public interface RecalculateAvailableCreditUseCase {
     record ConsumeCreditCommand(
             String creditLimitId,
             Money amount,
+            String description
+    ) {}
+
+    record RestoreCreditCommand(
+            String creditLimitId,
+            Money amount,
+            java.time.LocalDate originalTransactionDate,
             String description
     ) {}
 

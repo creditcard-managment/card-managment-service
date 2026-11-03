@@ -78,6 +78,9 @@ public class TransactionEntityMapper {
                 .reversalReason(transaction.getStatus() == TransactionStatus.REVERSED
                         ? transaction.getDeclineReason()
                         : null)
+                .originalTransactionId(transaction.getOriginalTransactionId() != null
+                        ? transaction.getOriginalTransactionId().getValue()
+                        : null)
                 .version(transaction.getVersion())
                 .build();
     }
@@ -173,6 +176,9 @@ public class TransactionEntityMapper {
             setField(transaction, "transactionDate", entity.getTransactionDate());
             setField(transaction, "settlementDate", entity.getSettlementDate());
             setField(transaction, "version", entity.getVersion());
+            setField(transaction, "originalTransactionId", entity.getOriginalTransactionId() != null
+                    ? mapToTransactionId(entity.getOriginalTransactionId())
+                    : null);
 
         } catch (Exception e) {
             throw new RuntimeException("Failed to reconstruct transaction state", e);

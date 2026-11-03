@@ -111,6 +111,40 @@ public class PaymentController {
     }
 
     /**
+     * Pre-authorize a purchase
+     */
+    @PostMapping("/pre-authorize")
+    @Operation(summary = "Pre-authorize a purchase",
+            description = "Authorizes a purchase and holds the credit without capturing it. "
+                    + "The transaction stays AUTHORIZED until it is captured or reversed")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Purchase pre-authorized (AUTHORIZED)",
+                    content = @Content(schema = @Schema(implementation = PaymentResponse.class))),
+            @ApiResponse(responseCode = "400", description = "Invalid request data",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            @ApiResponse(responseCode = "402", description = "Pre-authorization declined",
+                    content = @Content(schema = @Schema(implementation = PaymentResponse.class))),
+            @ApiResponse(responseCode = "500", description = "Internal server error",
+                    content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    public ResponseEntity<PaymentResponse> preAuthorize(
+            @Valid @RequestBody ProcessPaymentCommand command) {
+
+        log.info("Processing pre-authorization request for card: {}, amount: {} {}",
+                command.getCardId(), command.getAmount(), command.getCurrency());
+
+        Transaction transaction = processPaymentUseCase.preAuthorize(command);
+        PaymentResponse response = paymentMapper.toPaymentResponse(transaction);
+
+        HttpStatus status = response.isApproved() ? HttpStatus.CREATED : HttpStatus.PAYMENT_REQUIRED;
+
+        log.info("Pre-authorization processed: {}, status: {}",
+                transaction.getTransactionId(), transaction.getStatus());
+
+        return ResponseEntity.status(status).body(response);
+    }
+
+    /**
      * Capture a pre-authorized transaction
      */
     @PostMapping("/{transactionId}/capture")

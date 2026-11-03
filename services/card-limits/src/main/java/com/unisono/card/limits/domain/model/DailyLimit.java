@@ -85,6 +85,20 @@ public class DailyLimit implements Serializable {
     }
 
     /**
+     * Devuelve al cupo del día lo consumido por una transacción que se reversa o se devuelve.
+     * Solo aplica si la transacción original es del día en curso: si es de otro día, ese cupo ya se reseteó.
+     */
+    public DailyLimit restore(Money transactionAmount, LocalDate originalDate) {
+        if (needsReset() || !this.resetDate.equals(originalDate)) {
+            return this;
+        }
+        Money newConsumed = transactionAmount.isGreaterThan(this.consumed)
+                ? Money.zero(this.consumed.getCurrencyCode())
+                : this.consumed.subtract(transactionAmount);
+        return new DailyLimit(this.amount, newConsumed, this.resetDate);
+    }
+
+    /**
      * Verifica si necesita reset (cambió el día)
      */
     public boolean needsReset() {

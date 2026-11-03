@@ -3,8 +3,10 @@ package com.unisono.card.payment.application.service;
 import com.unisono.card.payment.application.dto.request.ProcessCashAdvanceCommand;
 import com.unisono.card.payment.application.dto.request.ProcessPaymentCommand;
 import com.unisono.card.payment.application.mapper.PaymentMapper;
+import com.unisono.card.payment.domain.model.CardVerification;
 import com.unisono.card.payment.domain.model.Transaction;
 import com.unisono.card.payment.domain.model.TransactionId;
+import com.unisono.card.payment.domain.model.TransactionStatus;
 import com.unisono.card.payment.domain.model.TransactionType;
 import com.unisono.card.payment.domain.port.input.ProcessPaymentUseCase;
 import com.unisono.card.payment.domain.port.output.PaymentEventPublisher;
@@ -37,10 +39,11 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
     @Override
     @Transactional
     public Transaction processPurchase(ProcessPaymentCommand command) {
-        return process(command, TransactionType.PURCHASE);
+        return process(command, TransactionType.PURCHASE, CardVerification.ofCvv(command.getCvv()), true);
     }
 
-    private Transaction process(ProcessPaymentCommand command, TransactionType type) {
+    private Transaction process(ProcessPaymentCommand command, TransactionType type,
+                                CardVerification verification, boolean capture) {
         log.info("Processing {} transaction for card: {}, amount: {} {}",
                 type, command.getCardId(), command.getAmount(), command.getCurrency());
 
@@ -53,28 +56,42 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
             validationService.validatePaymentMethod(components.getPaymentMethod(), type);
 
             // 3. Process payment through domain service
-            Transaction transaction = paymentDomainService.processPayment(
-                    components.getCardId(),
-                    components.getCardData(),
-                    components.getMerchantInfo(),
-                    components.getAmount(),
-                    components.getPaymentMethod(),
-                    type
-            );
+            Transaction transaction = capture
+                    ? paymentDomainService.processPayment(
+                            components.getCardId(),
+                            components.getCardData(),
+                            components.getMerchantInfo(),
+                            components.getAmount(),
+                            components.getPaymentMethod(),
+                            type,
+                            verification)
+                    : paymentDomainService.preAuthorize(
+                            components.getCardId(),
+                            components.getCardData(),
+                            components.getMerchantInfo(),
+                            components.getAmount(),
+                            components.getPaymentMethod(),
+                            verification);
 
             // 4. Set terminal information if provided
             if (command.getTerminalId() != null) {
                 transaction.setTerminalInfo(command.getTerminalId(), command.getPosEntryMode());
             }
 
-            // 5. Persist transaction
+            // 5. Persist transaction (approved or declined: rejections are recorded too)
             Transaction savedTransaction = transactionRepository.save(transaction);
 
             // 6. Publish domain events
             eventPublisher.publishAll(savedTransaction.getDomainEvents()); // ✅ Ahora es List<DomainEvent>
             savedTransaction.clearDomainEvents();
 
-            log.info("{} transaction processed successfully: {}", type, savedTransaction.getTransactionId());
+            if (savedTransaction.getStatus() != TransactionStatus.DECLINED) {
+                log.info("{} transaction processed: {}, status: {}", type, savedTransaction.getTransactionId(),
+                        savedTransaction.getStatus());
+            } else {
+                log.info("{} transaction declined: {} - {}", type, savedTransaction.getTransactionId(),
+                        savedTransaction.getDeclineReason());
+            }
             return savedTransaction;
 
         } catch (Exception ex) {
@@ -112,9 +129,8 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
                     .terminalId(command.getTerminalId())
                     .build();
 
-            Transaction transaction = process(paymentCommand, TransactionType.CASH_ADVANCE);
+            Transaction transaction = process(paymentCommand, TransactionType.CASH_ADVANCE, CardVerification.ofPin(command.getPin()), true);
 
-            log.info("Cash advance processed successfully: {}", transaction.getTransactionId());
             return transaction;
 
         } catch (Exception ex) {
@@ -124,25 +140,12 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
     }
 
     /**
-     * Authorize a transaction (reserve funds without capturing)
+     * Pre-authorize a purchase (authorize and hold the credit without capturing)
      */
     @Override
     @Transactional
-    public Transaction authorizeTransaction(TransactionId transactionId) {
-        log.info("Authorizing transaction: {}", transactionId);
-
-        Transaction transaction = transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new com.unisono.card.payment.domain.exception.TransactionNotFoundException(transactionId));
-
-        // Transaction should already be authorized during processing
-        // This method is for pre-authorization flows
-
-        Transaction savedTransaction = transactionRepository.save(transaction);
-        eventPublisher.publishAll(savedTransaction.getDomainEvents());
-        savedTransaction.clearDomainEvents();
-
-        log.info("Transaction authorized: {}", transactionId);
-        return savedTransaction;
+    public Transaction preAuthorize(ProcessPaymentCommand command) {
+        return process(command, TransactionType.PURCHASE, CardVerification.ofCvv(command.getCvv()), false);
     }
 
     /**
@@ -156,15 +159,7 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
         Transaction transaction = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new com.unisono.card.payment.domain.exception.TransactionNotFoundException(transactionId));
 
-        if (transaction.getStatus() != com.unisono.card.payment.domain.model.TransactionStatus.AUTHORIZED) {
-            throw new com.unisono.card.payment.domain.exception.InvalidTransactionException(
-                    transactionId,
-                    "Only authorized transactions can be captured"
-            );
-        }
-
-        // Approve the transaction (capture)
-        transaction.approve();
+        paymentDomainService.captureTransaction(transaction);
 
         Transaction savedTransaction = transactionRepository.save(transaction);
         eventPublisher.publishAll(savedTransaction.getDomainEvents());

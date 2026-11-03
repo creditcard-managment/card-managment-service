@@ -51,18 +51,6 @@ public class TransactionValidationService {
     }
 
     /**
-     * Validate refund amount against original transaction
-     */
-    public void validateRefundAmount(Money refundAmount, Money originalAmount) {
-        if (refundAmount.getAmount().compareTo(originalAmount.getAmount()) > 0) {
-            throw new InvalidTransactionException(
-                    String.format("Refund amount %s exceeds original amount %s",
-                            refundAmount, originalAmount)
-            );
-        }
-    }
-
-    /**
      * Validate transaction can be reversed
      */
     public void validateCanReverse(Transaction transaction) {

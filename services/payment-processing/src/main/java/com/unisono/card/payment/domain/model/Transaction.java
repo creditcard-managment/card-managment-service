@@ -28,6 +28,11 @@ public class Transaction {
     private final TransactionAmount amount;
     private final PaymentMethod paymentMethod;
 
+    /**
+     * Refunded transaction (only for REFUND)
+     */
+    private TransactionId originalTransactionId;
+
     private TransactionStatus status;
     private AuthorizationCode authorizationCode;
     private Integer riskScore;
@@ -122,6 +127,7 @@ public class Transaction {
                 amount,
                 PaymentMethod.ONLINE
         );
+        transaction.originalTransactionId = originalTransactionId;
 
         transaction.addDomainEvent(new RefundInitiated(
                 transaction.transactionId,
@@ -132,6 +138,14 @@ public class Transaction {
         ));
 
         return transaction;
+    }
+
+    /**
+     * Records the risk score evaluated by the fraud check, so a declined transaction keeps it too
+     */
+    public void assessRisk(Integer riskScore) {
+        validateNotFinal();
+        this.riskScore = riskScore;
     }
 
     /**
@@ -177,9 +191,6 @@ public class Transaction {
     }
 
     /**
-     * Decline the transaction
-     */
-    /**
      * Approves a refund. Refunds are not authorized by the network: they go from PENDING to APPROVED.
      */
     public void approveRefund(TransactionId originalTransactionId) {
@@ -203,11 +214,20 @@ public class Transaction {
         ));
     }
 
-    public void decline(String reason) {
+    /**
+     * Decline the transaction. The declined code keeps the ISO response code (51, 55, 59, ...)
+     * so the rejection is recorded and reported with it.
+     */
+    public void decline(String reason, AuthorizationCode declinedCode) {
         validateNotFinal();
+
+        if (declinedCode == null || declinedCode.isApproved()) {
+            throw new InvalidTransactionException("A transaction must be declined with a declined response code");
+        }
 
         this.status = TransactionStatus.DECLINED;
         this.declineReason = reason;
+        this.authorizationCode = declinedCode;
 
         addDomainEvent(new PaymentDeclined(
                 this.transactionId,

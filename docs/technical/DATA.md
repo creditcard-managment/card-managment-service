@@ -74,6 +74,7 @@ com.unisono.card.data
 | `UnblockCardUseCase` | `CardSecurityService` | `POST /{cardId}/unblock` |
 | `ValidatePINUseCase` | `PINManagementService` | `POST /{cardId}/validate-pin` |
 | `ResetPINUseCase` | `PINManagementService` | `POST /{cardId}/reset-pin` |
+| `ValidateCVVUseCase` | `CVVValidationService` | `POST /{cardId}/validate-cvv` |
 | `UpdateCardStatusUseCase` | `CardManagementService` | `PUT /{cardId}/status` |
 | *(métodos directos, sin port)* | `CardManagementService` | `PUT /{cardId}/activated-at`, `PUT /{cardId}/card-data` |
 
@@ -290,6 +291,22 @@ Respuesta **200** `{ "valid": true | false }`. Devuelve `false` también si la t
 - Sobre una tarjeta bloqueada responde **422**.
 - `newPin` se valida con `PIN.of(...)`, se hashea con BCrypt y se guarda.
 - Respuesta **200** `CardResponse`.
+
+### 4.3 bis CVV (`CVVController`)
+
+#### `POST /{cardId}/validate-cvv`
+
+```json
+{ "cvv": "123" }
+```
+
+Respuesta **200** `{ "valid": true | false }`. La usa `payment-processing` en pagos con tarjeta no presente (`ONLINE`/`MANUAL`).
+
+- El CVV tiene 3 o 4 dígitos (400 si no).
+- Devuelve `false` si no coincide o si la tarjeta todavía no tiene CVV asignado (`PUT /{cardId}/card-data`).
+- La comparación contra el CVV descifrado es de tiempo constante (`MessageDigest.isEqual`).
+- Sobre una tarjeta bloqueada responde **422**. Tarjeta inexistente → **404**.
+- A diferencia del PIN, un CVV incorrecto **no** suma intentos ni bloquea la tarjeta.
 
 ### 4.4 DTOs de respuesta
 

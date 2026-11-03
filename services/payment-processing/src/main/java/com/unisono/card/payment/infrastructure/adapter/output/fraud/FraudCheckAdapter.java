@@ -76,12 +76,10 @@ public class FraudCheckAdapter implements FraudCheckPort {
     }
 
     @Override
-    public boolean isSuspicious(Transaction transaction) {
+    public boolean isSuspicious(Transaction transaction, int riskScore) {
         log.debug("Checking if transaction is suspicious: {}", transaction.getTransactionId());
 
         try {
-            Integer riskScore = calculateRiskScore(transaction);
-
             boolean isSuspicious = riskScore >= highRiskThreshold;
 
             // Additional checks

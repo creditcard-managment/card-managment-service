@@ -54,6 +54,28 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     }
 
     @Override
+    public Optional<Transaction> findByIdForUpdate(TransactionId transactionId) {
+        return jpaRepository.findByIdForUpdate(transactionId.getValue())
+                .map(entityMapper::toDomain);
+    }
+
+    @Override
+    public List<Transaction> findRefundsOf(TransactionId originalTransactionId) {
+        return jpaRepository.findByOriginalTransactionIdOrderByTransactionDateAsc(originalTransactionId.getValue())
+                .stream()
+                .map(entityMapper::toDomain)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Transaction> findPreAuthorizationsAuthorizedBefore(LocalDateTime date) {
+        return jpaRepository.findExpiredPreAuthorizations(date)
+                .stream()
+                .map(entityMapper::toDomain)
+                .collect(Collectors.toList());
+    }
+
+    @Override
     public List<Transaction> findByCardId(CardId cardId) {
         log.debug("Finding transactions for card: {}", cardId);
 

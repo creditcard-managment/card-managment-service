@@ -42,6 +42,7 @@ public interface RefundMapper {
      * Convert Transaction (refund) to RefundResponse
      */
     @Mapping(target = "refundTransactionId", expression = "java(transaction.getTransactionId().toString())")
+    @Mapping(target = "originalTransactionId", expression = "java(transaction.getOriginalTransactionId() != null ? transaction.getOriginalTransactionId().toString() : null)")
     @Mapping(target = "cardId", expression = "java(transaction.getCardId().toString())")
     @Mapping(target = "refundAmount", expression = "java(transaction.getAmount().getAmount().getAmount())")
     @Mapping(target = "currency", expression = "java(transaction.getAmount().getAmount().getCurrency().toString())")

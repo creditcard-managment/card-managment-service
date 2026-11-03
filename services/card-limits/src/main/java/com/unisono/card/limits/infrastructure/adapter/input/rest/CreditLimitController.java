@@ -386,6 +386,29 @@ public class CreditLimitController {
         return ResponseEntity.ok(response);
     }
 
+    @PostMapping("/{creditLimitId}/restore-credit")
+    @Operation(summary = "Restaurar crédito (reverso o devolución)",
+            description = "Deshace el consumo de una transacción reversada o devuelta: sube el disponible y "
+                    + "devuelve el cupo diario y mensual si la transacción original es del día o del mes en curso")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Crédito restaurado"),
+            @ApiResponse(responseCode = "400", description = "Datos inválidos"),
+            @ApiResponse(responseCode = "404", description = "Límite no encontrado")
+    })
+    public ResponseEntity<CreditLimitResponse> restoreCredit(
+            @Parameter(description = "ID del límite de crédito")
+            @PathVariable String creditLimitId,
+
+            @Valid @RequestBody RestoreCreditRequest request
+    ) {
+        log.info("Restoring credit: {} - Amount: {}", creditLimitId, request.getAmount());
+
+        CreditLimit creditLimit = recalculateAvailableCreditUseCase.restoreCredit(
+                mapper.toRestoreCommand(creditLimitId, request));
+
+        return ResponseEntity.ok(mapper.toResponse(creditLimit));
+    }
+
     // ========================================
     // HISTORY
     // ========================================

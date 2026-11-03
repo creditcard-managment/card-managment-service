@@ -25,6 +25,21 @@ public interface TransactionRepository {
     Optional<Transaction> findById(TransactionId transactionId);
 
     /**
+     * Find transaction by ID locking it until the end of the current transaction
+     */
+    Optional<Transaction> findByIdForUpdate(TransactionId transactionId);
+
+    /**
+     * Refunds of a transaction (any status)
+     */
+    List<Transaction> findRefundsOf(TransactionId originalTransactionId);
+
+    /**
+     * Pre-authorizations (AUTHORIZED purchases) authorized before the given date
+     */
+    List<Transaction> findPreAuthorizationsAuthorizedBefore(LocalDateTime date);
+
+    /**
      * Find all transactions for a card
      */
     List<Transaction> findByCardId(CardId cardId);

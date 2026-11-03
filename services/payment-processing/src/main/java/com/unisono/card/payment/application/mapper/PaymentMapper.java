@@ -56,7 +56,7 @@ public interface PaymentMapper {
     @Mapping(target = "merchantName", expression = "java(transaction.getMerchantInfo().getMerchantName())")
     @Mapping(target = "transactionDate", source = "transactionDate")
     @Mapping(target = "authorizedAt", expression = "java(getAuthorizedAt(transaction))")
-    @Mapping(target = "approved", expression = "java(transaction.isSuccessful())")
+    @Mapping(target = "approved", expression = "java(isApproved(transaction))")
     @Mapping(target = "declineReason", source = "declineReason")
     PaymentResponse toPaymentResponse(Transaction transaction);
 
@@ -101,7 +101,7 @@ public interface PaymentMapper {
     }
 
     default String getAuthorizationCodeValue(Transaction transaction) {
-        return transaction.getAuthorizationCode() != null
+        return transaction.getAuthorizationCode() != null && transaction.getAuthorizationCode().isApproved()
                 ? transaction.getAuthorizationCode().getCode()
                 : null;
     }
@@ -115,6 +115,8 @@ public interface PaymentMapper {
     default String getResponseMessage(Transaction transaction) {
         if (transaction.getStatus() == TransactionStatus.APPROVED) {
             return "Transaction approved successfully";
+        } else if (transaction.getStatus() == TransactionStatus.AUTHORIZED) {
+            return "Transaction pre-authorized, pending capture";
         } else if (transaction.getStatus() == TransactionStatus.DECLINED) {
             return "Transaction declined: " + transaction.getDeclineReason();
         } else if (transaction.getStatus() == TransactionStatus.REVERSED) {
@@ -123,9 +125,16 @@ public interface PaymentMapper {
         return transaction.getStatus().getDisplayName();
     }
 
+    /**
+     * Not declined: approved, settled, or pre-authorized (AUTHORIZED) waiting for capture
+     */
+    default boolean isApproved(Transaction transaction) {
+        return transaction.isSuccessful() || transaction.getStatus() == TransactionStatus.AUTHORIZED;
+    }
+
     default java.time.LocalDateTime getAuthorizedAt(Transaction transaction) {
-        return transaction.getAuthorizationCode() != null
-                ? transaction.getAuthorizationCode().getAuthorizedAt()  // ✅ Retorna LocalDateTime directamente
+        return transaction.getAuthorizationCode() != null && transaction.getAuthorizationCode().isApproved()
+                ? transaction.getAuthorizationCode().getAuthorizedAt()
                 : null;
     }
 
