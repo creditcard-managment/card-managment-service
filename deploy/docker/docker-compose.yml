@@ -173,6 +173,8 @@ services:
       SPRING_DATASOURCE_PASSWORD: postgres
       # Sobreescribe el localhost:9092 del yml → apunta al broker interno
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Un solo broker en compose: los topics payment.* no pueden tener más de 1 réplica
+      KAFKA_TOPIC_REPLICATION_FACTOR: 1
       # Servicios internos por nombre de contenedor (localhost no sirve dentro de Docker)
       CARD_DATA_SERVICE_URL: http://card-data-service:8081
       CARD_LIMITS_SERVICE_URL: http://card-limits-service:8082

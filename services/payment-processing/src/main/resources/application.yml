@@ -55,8 +55,9 @@ spring:
         max.in.flight.requests.per.connection: 5
 
     topics:
-      partitions: 3
-      replication-factor: 2
+      partitions: ${KAFKA_TOPIC_PARTITIONS:3}
+      # Tiene que ser <= cantidad de brokers (docker-compose tiene uno solo: KAFKA_TOPIC_REPLICATION_FACTOR=1)
+      replication-factor: ${KAFKA_TOPIC_REPLICATION_FACTOR:2}
 
       payment:
         initiated: payment.processing.initiated
