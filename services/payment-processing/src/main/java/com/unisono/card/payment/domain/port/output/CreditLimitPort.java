@@ -1,42 +1,32 @@
 package com.unisono.card.payment.domain.port.output;
 
+import com.unisono.card.payment.domain.model.TransactionType;
 import com.unisono.card.shared.domain.valueobject.CardId;
 import com.unisono.card.shared.domain.valueobject.Money;
 
-import java.math.BigDecimal;
-
 /**
- * Port for checking and managing credit limits
+ * Port for checking and managing credit limits (card-limits)
+ *
+ * Credit is consumed when a debit is approved and released when it is reversed or refunded.
+ * Settlement does not change the available credit.
  */
 public interface CreditLimitPort {
 
     /**
-     * Get available credit for a card
+     * Check if the card can spend the amount (available credit, daily and monthly limits)
      */
-    Money getAvailableCredit(CardId cardId);
+    CreditCheck checkCredit(CardId cardId, Money amount, TransactionType type);
 
     /**
-     * Check if card has sufficient funds for amount
+     * Consume credit for an approved purchase or cash advance
      */
-    boolean hasSufficientFunds(CardId cardId, Money amount);
+    void consumeCredit(CardId cardId, Money amount, TransactionType type, String description);
 
     /**
-     * Reserve credit (hold funds)
+     * Give credit back (reversal or refund)
      */
-    void reserveCredit(CardId cardId, Money amount);
+    void releaseCredit(CardId cardId, Money amount, String description);
 
-    /**
-     * Release reserved credit
-     */
-    void releaseCredit(CardId cardId, Money amount);
-
-    /**
-     * Consume credit (finalize transaction)
-     */
-    void consumeCredit(CardId cardId, Money amount);
-
-    /**
-     * Restore credit (refund/reversal)
-     */
-    void restoreCredit(CardId cardId, Money amount);
+    record CreditCheck(boolean approved, String reason, Money available) {
+    }
 }

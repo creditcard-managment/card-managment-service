@@ -64,10 +64,11 @@ public class SettlementService implements SettleTransactionsUseCase {
      */
     @Override
     @Transactional
-    public List<Transaction> settleBatch(List<TransactionId> transactionIds) {
+    public BatchSettlementResult settleBatch(List<TransactionId> transactionIds) {
         log.info("Settling batch of {} transactions", transactionIds.size());
 
         List<Transaction> settledTransactions = new ArrayList<>();
+        List<TransactionId> failedTransactionIds = new ArrayList<>();
 
         for (TransactionId transactionId : transactionIds) {
             try {
@@ -75,6 +76,7 @@ public class SettlementService implements SettleTransactionsUseCase {
                 settledTransactions.add(settled);
             } catch (Exception ex) {
                 log.error("Failed to settle transaction {} in batch", transactionId, ex);
+                failedTransactionIds.add(transactionId);
                 // Continue with other transactions
             }
         }
@@ -82,7 +84,7 @@ public class SettlementService implements SettleTransactionsUseCase {
         log.info("Batch settlement completed: {}/{} transactions settled",
                 settledTransactions.size(), transactionIds.size());
 
-        return settledTransactions;
+        return new BatchSettlementResult(settledTransactions, failedTransactionIds);
     }
 
     /**
@@ -90,7 +92,7 @@ public class SettlementService implements SettleTransactionsUseCase {
      */
     @Override
     @Transactional
-    public List<Transaction> settleAllPending() {
+    public BatchSettlementResult settleAllPending() {
         log.info("Settling all pending transactions");
 
         List<Transaction> pendingTransactions = transactionRepository.findPendingSettlement();

@@ -5,6 +5,7 @@ import com.unisono.card.payment.application.dto.request.ProcessPaymentCommand;
 import com.unisono.card.payment.application.mapper.PaymentMapper;
 import com.unisono.card.payment.domain.model.Transaction;
 import com.unisono.card.payment.domain.model.TransactionId;
+import com.unisono.card.payment.domain.model.TransactionType;
 import com.unisono.card.payment.domain.port.input.ProcessPaymentUseCase;
 import com.unisono.card.payment.domain.port.output.PaymentEventPublisher;
 import com.unisono.card.payment.domain.port.output.TransactionRepository;
@@ -36,8 +37,12 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
     @Override
     @Transactional
     public Transaction processPurchase(ProcessPaymentCommand command) {
-        log.info("Processing purchase transaction for card: {}, amount: {} {}",
-                command.getCardId(), command.getAmount(), command.getCurrency());
+        return process(command, TransactionType.PURCHASE);
+    }
+
+    private Transaction process(ProcessPaymentCommand command, TransactionType type) {
+        log.info("Processing {} transaction for card: {}, amount: {} {}",
+                type, command.getCardId(), command.getAmount(), command.getCurrency());
 
         try {
             // 1. Map command to domain objects
@@ -45,10 +50,7 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
 
             // 2. Validate amount and payment method
             validationService.validateAmount(components.getAmount());
-            validationService.validatePaymentMethod(
-                    components.getPaymentMethod(),
-                    com.unisono.card.payment.domain.model.TransactionType.PURCHASE
-            );
+            validationService.validatePaymentMethod(components.getPaymentMethod(), type);
 
             // 3. Process payment through domain service
             Transaction transaction = paymentDomainService.processPayment(
@@ -56,7 +58,8 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
                     components.getCardData(),
                     components.getMerchantInfo(),
                     components.getAmount(),
-                    components.getPaymentMethod()
+                    components.getPaymentMethod(),
+                    type
             );
 
             // 4. Set terminal information if provided
@@ -71,11 +74,11 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
             eventPublisher.publishAll(savedTransaction.getDomainEvents()); // ✅ Ahora es List<DomainEvent>
             savedTransaction.clearDomainEvents();
 
-            log.info("Purchase transaction processed successfully: {}", savedTransaction.getTransactionId());
+            log.info("{} transaction processed successfully: {}", type, savedTransaction.getTransactionId());
             return savedTransaction;
 
         } catch (Exception ex) {
-            log.error("Error processing purchase transaction for card: {}", command.getCardId(), ex);
+            log.error("Error processing {} transaction for card: {}", type, command.getCardId(), ex);
             throw ex;
         }
     }
@@ -90,6 +93,9 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
                 command.getCardId(), command.getAmount(), command.getCurrency());
 
         try {
+            // El cajero es una terminal de payment_terminals; su comercio es el operador del ATM
+            String merchantId = paymentDomainService.resolveTerminalMerchant(command.getTerminalId());
+
             // Map to ProcessPaymentCommand (reuse logic)
             ProcessPaymentCommand paymentCommand = ProcessPaymentCommand.builder()
                     .cardId(command.getCardId())
@@ -98,7 +104,7 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
                     .expirationDate(command.getExpirationDate())
                     .amount(command.getAmount())
                     .currency(command.getCurrency())
-                    .merchantId("ATM-" + command.getTerminalId())
+                    .merchantId(merchantId)
                     .merchantName("ATM Cash Advance")
                     .merchantCity(command.getAtmLocation())
                     .merchantCountry(command.getCountry())
@@ -106,7 +112,7 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
                     .terminalId(command.getTerminalId())
                     .build();
 
-            Transaction transaction = processPurchase(paymentCommand);
+            Transaction transaction = process(paymentCommand, TransactionType.CASH_ADVANCE);
 
             log.info("Cash advance processed successfully: {}", transaction.getTransactionId());
             return transaction;

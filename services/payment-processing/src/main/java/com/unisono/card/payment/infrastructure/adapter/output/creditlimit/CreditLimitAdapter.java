@@ -1,24 +1,41 @@
 package com.unisono.card.payment.infrastructure.adapter.output.creditlimit;
 
-
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.unisono.card.payment.domain.exception.ExternalServiceException;
+import com.unisono.card.payment.domain.exception.InsufficientFundsException;
+import com.unisono.card.payment.domain.model.TransactionType;
 import com.unisono.card.payment.domain.port.output.CreditLimitPort;
 import com.unisono.card.shared.domain.valueobject.CardId;
 import com.unisono.card.shared.domain.valueobject.Money;
+import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 
 /**
  * Adapter for managing credit limits via card-limits service
+ *
+ * - checkCredit: POST /api/v1/credit-limits/validate/purchase | cash-advance (disponible, diario y mensual)
+ * - consumeCredit: POST /api/v1/credit-limits/{creditLimitId}/consume-purchase | consume-cash-advance
+ * - releaseCredit: POST /api/v1/credit-limits/{creditLimitId}/release-credit
+ *
+ * The creditLimitId is resolved with GET /api/v1/credit-limits/card/{cardId}.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class CreditLimitAdapter implements CreditLimitPort {
+
+    private static final String SERVICE = "card-limits";
+    private static final String BASE_PATH = "/api/v1/credit-limits";
+    private static final int MAX_DESCRIPTION_LENGTH = 255;
 
     private final RestTemplate restTemplate;
 
@@ -26,179 +43,145 @@ public class CreditLimitAdapter implements CreditLimitPort {
     private String cardLimitsServiceUrl;
 
     @Override
-    public Money getAvailableCredit(CardId cardId) {
-        log.debug("Getting available credit for card: {}", cardId);
+    public CreditCheck checkCredit(CardId cardId, Money amount, TransactionType type) {
+        log.debug("Checking credit for card: {}, amount: {}, type: {}", cardId, amount, type);
 
+        String operation = type == TransactionType.CASH_ADVANCE ? "cash-advance" : "purchase";
+        String url = String.format("%s%s/validate/%s", cardLimitsServiceUrl, BASE_PATH, operation);
         try {
-            String url = String.format("%s/api/v1/credit-limits/%s/available",
-                    cardLimitsServiceUrl, cardId.getValue());
-
-            AvailableCreditResponse response = restTemplate.getForObject(url, AvailableCreditResponse.class);
-
-            if (response != null) {
-                Money availableCredit = Money.of(response.getAvailableAmount(), response.getCurrency());
-                log.debug("Available credit for card {}: {}", cardId, availableCredit);
-                return availableCredit;
+            ValidationResultResponse response = restTemplate.postForObject(url,
+                    new ValidatePurchaseRequest(cardId.getValue(), amount.getAmount(), amount.getCurrencyCode()),
+                    ValidationResultResponse.class);
+            if (response == null) {
+                throw new ExternalServiceException(SERVICE, "empty validation response for card " + cardId, null);
             }
 
-            log.warn("No credit limit information found for card: {}", cardId);
-            return Money.of(BigDecimal.ZERO, "USD");
-
-        } catch (Exception ex) {
-            log.error("Error getting available credit for {}: {}", cardId, ex.getMessage(), ex);
-            return Money.of(BigDecimal.ZERO, "USD");
-        }
-    }
-
-    @Override
-    public boolean hasSufficientFunds(CardId cardId, Money amount) {
-        log.debug("Checking sufficient funds for card: {}, amount: {}", cardId, amount);
-
-        try {
-            Money availableCredit = getAvailableCredit(cardId);
-
-            boolean hasFunds = availableCredit.getAmount().compareTo(amount.getAmount()) >= 0;
-            log.debug("Card {} has sufficient funds for {}: {}", cardId, amount, hasFunds);
-
-            return hasFunds;
-
-        } catch (Exception ex) {
-            log.error("Error checking sufficient funds for {}: {}", cardId, ex.getMessage(), ex);
-            return false;
-        }
-    }
-
-    @Override
-    public void reserveCredit(CardId cardId, Money amount) {
-        log.debug("Reserving credit for card: {}, amount: {}", cardId, amount);
-
-        try {
-            String url = String.format("%s/api/v1/credit-limits/%s/reserve",
-                    cardLimitsServiceUrl, cardId.getValue());
-
-            ReserveCreditRequest request = new ReserveCreditRequest(
-                    amount.getAmount(),
-                    amount.getCurrency().toString()
+            Money available = Money.of(
+                    response.getAvailableCredit() != null ? response.getAvailableCredit() : BigDecimal.ZERO,
+                    response.getCurrency() != null ? response.getCurrency() : amount.getCurrencyCode()
             );
+            CreditCheck check = new CreditCheck(Boolean.TRUE.equals(response.getApproved()),
+                    response.getReason(), available);
+            log.debug("Credit check for card {}: {}", cardId, check);
+            return check;
 
-            restTemplate.postForObject(url, request, Void.class);
-
-            log.info("Successfully reserved credit for card {}: {}", cardId, amount);
-
-        } catch (Exception ex) {
-            log.error("Error reserving credit for {}: {}", cardId, ex.getMessage(), ex);
-            throw new RuntimeException("Failed to reserve credit", ex);
+        } catch (HttpClientErrorException.NotFound ex) {
+            log.warn("Card {} has no credit limit in card-limits", cardId);
+            return new CreditCheck(false, "Card has no credit limit", Money.zero(amount.getCurrencyCode()));
+        } catch (RestClientException ex) {
+            log.error("Error checking credit for {}: {}", cardId, ex.getMessage());
+            throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
         }
     }
 
     @Override
-    public void releaseCredit(CardId cardId, Money amount) {
+    public void consumeCredit(CardId cardId, Money amount, TransactionType type, String description) {
+        log.debug("Consuming credit for card: {}, amount: {}, type: {}", cardId, amount, type);
+
+        String creditLimitId = findCreditLimitId(cardId);
+        String operation = type == TransactionType.CASH_ADVANCE ? "consume-cash-advance" : "consume-purchase";
+        String url = String.format("%s%s/%s/%s", cardLimitsServiceUrl, BASE_PATH, creditLimitId, operation);
+        try {
+            restTemplate.postForObject(url,
+                    new ConsumeCreditRequest(amount.getAmount(), amount.getCurrencyCode(), truncate(description)),
+                    Void.class);
+            log.info("Consumed credit for card {}: {}", cardId, amount);
+
+        } catch (HttpClientErrorException ex) {
+            // Otra operación consumió el disponible entre la validación y el consumo
+            if (ex.getStatusCode() == HttpStatus.UNPROCESSABLE_ENTITY || ex.getStatusCode() == HttpStatus.BAD_REQUEST) {
+                log.warn("card-limits rejected consumption for {}: {}", cardId, ex.getResponseBodyAsString());
+                throw new InsufficientFundsException(cardId, amount, Money.zero(amount.getCurrencyCode()),
+                        "rejected by card-limits");
+            }
+            throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
+        } catch (RestClientException ex) {
+            log.error("Error consuming credit for {}: {}", cardId, ex.getMessage());
+            throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public void releaseCredit(CardId cardId, Money amount, String description) {
         log.debug("Releasing credit for card: {}, amount: {}", cardId, amount);
 
+        String creditLimitId = findCreditLimitId(cardId);
+        String url = String.format("%s%s/%s/release-credit", cardLimitsServiceUrl, BASE_PATH, creditLimitId);
         try {
-            String url = String.format("%s/api/v1/credit-limits/%s/release",
-                    cardLimitsServiceUrl, cardId.getValue());
+            restTemplate.postForObject(url,
+                    new ReleaseCreditRequest(amount.getAmount(), amount.getCurrencyCode(), truncate(description)),
+                    Void.class);
+            log.info("Released credit for card {}: {}", cardId, amount);
 
-            ReleaseCreditRequest request = new ReleaseCreditRequest(
-                    amount.getAmount(),
-                    amount.getCurrency().toString()
-            );
-
-            restTemplate.postForObject(url, request, Void.class);
-
-            log.info("Successfully released credit for card {}: {}", cardId, amount);
-
-        } catch (Exception ex) {
-            log.error("Error releasing credit for {}: {}", cardId, ex.getMessage(), ex);
-            throw new RuntimeException("Failed to release credit", ex);
+        } catch (RestClientException ex) {
+            log.error("Error releasing credit for {}: {}", cardId, ex.getMessage());
+            throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
         }
     }
 
-    @Override
-    public void consumeCredit(CardId cardId, Money amount) {
-        log.debug("Consuming credit for card: {}, amount: {}", cardId, amount);
-
+    private String findCreditLimitId(CardId cardId) {
+        String url = String.format("%s%s/card/%s", cardLimitsServiceUrl, BASE_PATH, cardId.getValue());
         try {
-            String url = String.format("%s/api/v1/credit-limits/%s/consume",
-                    cardLimitsServiceUrl, cardId.getValue());
+            CreditLimitResponse response = restTemplate.getForObject(url, CreditLimitResponse.class);
+            if (response == null || response.getId() == null) {
+                throw new ExternalServiceException(SERVICE, "empty credit limit for card " + cardId, null);
+            }
+            return response.getId();
 
-            ConsumeCreditRequest request = new ConsumeCreditRequest(
-                    amount.getAmount(),
-                    amount.getCurrency().toString()
-            );
-
-            restTemplate.postForObject(url, request, Void.class);
-
-            log.info("Successfully consumed credit for card {}: {}", cardId, amount);
-
-        } catch (Exception ex) {
-            log.error("Error consuming credit for {}: {}", cardId, ex.getMessage(), ex);
-            throw new RuntimeException("Failed to consume credit", ex);
+        } catch (RestClientException ex) {
+            log.error("Error getting credit limit for {}: {}", cardId, ex.getMessage());
+            throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
         }
     }
 
-    @Override
-    public void restoreCredit(CardId cardId, Money amount) {
-        log.debug("Restoring credit for card: {}, amount: {}", cardId, amount);
-
-        try {
-            String url = String.format("%s/api/v1/credit-limits/%s/restore",
-                    cardLimitsServiceUrl, cardId.getValue());
-
-            RestoreCreditRequest request = new RestoreCreditRequest(
-                    amount.getAmount(),
-                    amount.getCurrency().toString()
-            );
-
-            restTemplate.postForObject(url, request, Void.class);
-
-            log.info("Successfully restored credit for card {}: {}", cardId, amount);
-
-        } catch (Exception ex) {
-            log.error("Error restoring credit for {}: {}", cardId, ex.getMessage(), ex);
-            throw new RuntimeException("Failed to restore credit", ex);
-        }
+    private static String truncate(String description) {
+        return description.length() <= MAX_DESCRIPTION_LENGTH
+                ? description
+                : description.substring(0, MAX_DESCRIPTION_LENGTH);
     }
 
-    // ==================== Internal DTOs ====================
+    // ==================== Internal DTOs (contratos de card-limits) ====================
 
     @lombok.Data
     @lombok.NoArgsConstructor
-    @lombok.AllArgsConstructor
-    private static class AvailableCreditResponse {
-        private BigDecimal availableAmount;
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class ValidationResultResponse {
+        private Boolean approved;
+        private String reason;
+        private BigDecimal availableCredit;
+        private BigDecimal requestedAmount;
         private String currency;
     }
 
     @lombok.Data
     @lombok.NoArgsConstructor
-    @lombok.AllArgsConstructor
-    private static class ReserveCreditRequest {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class CreditLimitResponse {
+        private String id;
+        private String cardId;
+    }
+
+    @lombok.Data
+    @AllArgsConstructor
+    static class ValidatePurchaseRequest {
+        private String cardId;
         private BigDecimal amount;
         private String currency;
     }
 
     @lombok.Data
-    @lombok.NoArgsConstructor
-    @lombok.AllArgsConstructor
-    private static class ReleaseCreditRequest {
+    @AllArgsConstructor
+    static class ConsumeCreditRequest {
         private BigDecimal amount;
         private String currency;
+        private String description;
     }
 
     @lombok.Data
-    @lombok.NoArgsConstructor
-    @lombok.AllArgsConstructor
-    private static class ConsumeCreditRequest {
-        private BigDecimal amount;
+    @AllArgsConstructor
+    static class ReleaseCreditRequest {
+        private BigDecimal paymentAmount;
         private String currency;
-    }
-
-    @lombok.Data
-    @lombok.NoArgsConstructor
-    @lombok.AllArgsConstructor
-    private static class RestoreCreditRequest {
-        private BigDecimal amount;
-        private String currency;
+        private String description;
     }
 }

@@ -88,6 +88,29 @@ public class Transaction {
     /**
      * Factory method: Create a refund transaction
      */
+    public static Transaction createCashAdvance(CardId cardId, CardData cardData, MerchantInfo merchantInfo,
+                                                TransactionAmount amount, PaymentMethod paymentMethod) {
+        Transaction transaction = new Transaction(
+                TransactionId.generate(),
+                cardId,
+                cardData,
+                merchantInfo,
+                TransactionType.CASH_ADVANCE,
+                amount,
+                paymentMethod
+        );
+
+        transaction.addDomainEvent(new PaymentInitiated(
+                transaction.transactionId,
+                transaction.cardId,
+                transaction.amount,
+                transaction.type,
+                transaction.transactionDate
+        ));
+
+        return transaction;
+    }
+
     public static Transaction createRefund(CardId cardId, CardData cardData, MerchantInfo merchantInfo,
                                            TransactionAmount amount, TransactionId originalTransactionId) {
         Transaction transaction = new Transaction(
@@ -156,6 +179,30 @@ public class Transaction {
     /**
      * Decline the transaction
      */
+    /**
+     * Approves a refund. Refunds are not authorized by the network: they go from PENDING to APPROVED.
+     */
+    public void approveRefund(TransactionId originalTransactionId) {
+        if (this.type != TransactionType.REFUND) {
+            throw new InvalidTransactionException("Only refunds can be approved without authorization");
+        }
+        if (this.status != TransactionStatus.PENDING) {
+            throw new InvalidTransactionException(
+                    String.format("Refund with status %s cannot be approved", this.status)
+            );
+        }
+
+        this.status = TransactionStatus.APPROVED;
+
+        addDomainEvent(new RefundProcessed(
+                this.transactionId,
+                originalTransactionId,
+                this.cardId,
+                this.amount,
+                LocalDateTime.now()
+        ));
+    }
+
     public void decline(String reason) {
         validateNotFinal();
 

@@ -22,6 +22,10 @@ public class CardValidationException extends PaymentException {
         this.validationType = validationType;
     }
 
+    public static CardValidationException notFound(CardId cardId) {
+        return new CardValidationException(cardId, "EXISTENCE", "Card not found");
+    }
+
     public static CardValidationException expired(CardId cardId) {
         return new CardValidationException(cardId, "EXPIRATION", "Card is expired");
     }

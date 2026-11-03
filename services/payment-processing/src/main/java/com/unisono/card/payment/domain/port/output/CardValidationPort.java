@@ -1,8 +1,8 @@
 package com.unisono.card.payment.domain.port.output;
 
 import com.unisono.card.shared.domain.valueobject.CardId;
-import com.unisono.card.shared.domain.valueobject.CardNumber;
-import com.unisono.card.shared.domain.valueobject.CVV;
+
+import java.util.Optional;
 
 /**
  * Port for validating card information
@@ -10,32 +10,14 @@ import com.unisono.card.shared.domain.valueobject.CVV;
 public interface CardValidationPort {
 
     /**
-     * Validate if card is active and can process transactions
+     * Current status of the card in card-data, or empty if the card does not exist
      */
-    boolean isCardActive(CardId cardId);
+    Optional<CardStatusSnapshot> findCardStatus(CardId cardId);
 
-    /**
-     * Validate card number (Luhn algorithm)
-     */
-    boolean validateCardNumber(CardNumber cardNumber);
+    record CardStatusSnapshot(String status, boolean blocked, boolean expired) {
 
-    /**
-     * Validate CVV
-     */
-    boolean validateCVV(CardId cardId, CVV cvv);
-
-    /**
-     * Check if card is expired
-     */
-    boolean isCardExpired(CardId cardId);
-
-    /**
-     * Check if card is blocked or suspended
-     */
-    boolean isCardBlocked(CardId cardId);
-
-    /**
-     * Get card status
-     */
-    String getCardStatus(CardId cardId);
+        public boolean isActive() {
+            return "ACTIVE".equals(status);
+        }
+    }
 }

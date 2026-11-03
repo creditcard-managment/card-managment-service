@@ -1,6 +1,6 @@
 package com.unisono.card.payment.domain.port.output;
 
-import com.unisono.card.payment.domain.model.MerchantInfo;
+import java.util.Optional;
 
 /**
  * Port for validating merchant information
@@ -13,17 +13,12 @@ public interface MerchantValidationPort {
     boolean isMerchantActive(String merchantId);
 
     /**
-     * Get merchant information
-     */
-    MerchantInfo getMerchantInfo(String merchantId);
-
-    /**
      * Validate merchant category code (MCC)
      */
     boolean isValidMCC(String mcc);
 
     /**
-     * Check if card is restricted for this merchant
+     * Merchant that owns an active terminal (ATM or POS), or empty if the terminal is unknown or inactive
      */
-    boolean isCardRestrictedForMerchant(String cardId, String merchantId);
+    Optional<String> findMerchantIdByTerminal(String terminalId);
 }

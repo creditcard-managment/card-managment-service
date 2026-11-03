@@ -38,6 +38,17 @@ public class InsufficientFundsException extends PaymentException {
         this.availableAmount = availableAmount;
     }
 
+    public InsufficientFundsException(CardId cardId, Money requestedAmount, Money availableAmount, String reason) {
+        super(String.format(
+                "Insufficient funds on card %s: %s. Requested: %s, Available: %s",
+                cardId, reason, requestedAmount, availableAmount
+        ));
+        this.transactionId = null;
+        this.cardId = cardId;
+        this.requestedAmount = requestedAmount;
+        this.availableAmount = availableAmount;
+    }
+
     public TransactionId getTransactionId() {
         return transactionId;
     }

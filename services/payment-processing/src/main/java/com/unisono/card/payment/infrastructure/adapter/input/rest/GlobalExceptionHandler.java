@@ -183,6 +183,24 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle unavailable dependencies (card-data, card-limits)
+     */
+    @ExceptionHandler(ExternalServiceException.class)
+    public ResponseEntity<ErrorResponse> handleExternalService(
+            ExternalServiceException ex, WebRequest request) {
+
+        log.error("External service error: {}", ex.getMessage());
+
+        ErrorResponse error = errorMapper.toErrorResponse(
+                "SERVICE_UNAVAILABLE",
+                ex.getMessage(),
+                "A required service is unavailable, the payment was not processed",
+                request.getDescription(false)
+        );
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /**
      * Handle generic payment exceptions
      */
     @ExceptionHandler(PaymentException.class)

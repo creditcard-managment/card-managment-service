@@ -18,10 +18,16 @@ public interface SettleTransactionsUseCase {
     /**
      * Settle multiple transactions in batch
      */
-    List<Transaction> settleBatch(List<TransactionId> transactionIds);
+    BatchSettlementResult settleBatch(List<TransactionId> transactionIds);
 
     /**
      * Settle all pending transactions
      */
-    List<Transaction> settleAllPending();
+    BatchSettlementResult settleAllPending();
+
+    /**
+     * Result of a batch: transactions settled and ids that could not be settled
+     */
+    record BatchSettlementResult(List<Transaction> settled, List<TransactionId> failed) {
+    }
 }

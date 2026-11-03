@@ -2,6 +2,7 @@ package com.unisono.card.payment.application.mapper;
 
 import com.unisono.card.payment.application.dto.response.SettlementResponse;
 import com.unisono.card.payment.domain.model.Transaction;
+import com.unisono.card.payment.domain.model.TransactionId;
 import com.unisono.card.payment.domain.model.TransactionStatus;
 import org.mapstruct.*;
 
@@ -20,18 +21,20 @@ import java.util.stream.Collectors;
 public interface SettlementMapper {
 
     /**
-     * Create settlement response from list of transactions
+     * Create settlement response from the batch result
      */
     default SettlementResponse toSettlementResponse(
             String settlementBatchId,
             List<Transaction> transactions,
-            List<Transaction> failed) {
+            List<TransactionId> failed) {
 
         List<Transaction> settled = transactions.stream()
                 .filter(t -> t.getStatus() == TransactionStatus.SETTLED)
                 .collect(Collectors.toList());
 
-        BigDecimal totalAmount = transactions.stream()
+        int total = transactions.size() + failed.size();
+
+        BigDecimal totalAmount = settled.stream()
                 .map(t -> t.getAmount().getEffectiveAmount().getAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -44,16 +47,16 @@ public interface SettlementMapper {
                 .collect(Collectors.toList());
 
         List<String> failedIds = failed.stream()
-                .map(t -> t.getTransactionId().toString())
+                .map(TransactionId::toString)
                 .collect(Collectors.toList());
 
         String status = failed.isEmpty() ? "COMPLETED" : "PARTIAL";
         String message = String.format("Settlement completed: %d/%d transactions settled successfully",
-                settled.size(), transactions.size());
+                settled.size(), total);
 
         return SettlementResponse.builder()
                 .settlementBatchId(settlementBatchId)
-                .totalTransactions(transactions.size())
+                .totalTransactions(total)
                 .settledCount(settled.size())
                 .failedCount(failed.size())
                 .totalAmount(totalAmount)

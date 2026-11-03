@@ -21,7 +21,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -99,11 +98,7 @@ public class SettlementController {
                     .map(TransactionId::of)
                     .collect(Collectors.toList());
 
-            List<Transaction> settledTransactions = settleTransactionsUseCase.settleBatch(transactionIds);
-
-            // Calculate failed transactions
-            List<Transaction> failed = new ArrayList<>();
-            // Note: In real implementation, you'd track which ones failed during settlement
+            SettleTransactionsUseCase.BatchSettlementResult result = settleTransactionsUseCase.settleBatch(transactionIds);
 
             String batchId = command.getSettlementBatchId() != null
                     ? command.getSettlementBatchId()
@@ -111,12 +106,12 @@ public class SettlementController {
 
             SettlementResponse response = settlementMapper.toSettlementResponse(
                     batchId,
-                    settledTransactions,
-                    failed
+                    result.settled(),
+                    result.failed()
             );
 
             log.info("Batch settlement completed: {}, settled: {}/{}",
-                    batchId, settledTransactions.size(), command.getTransactionIds().size());
+                    batchId, result.settled().size(), command.getTransactionIds().size());
 
             return ResponseEntity.ok(response);
 
@@ -142,18 +137,18 @@ public class SettlementController {
         log.info("Settling all pending transactions");
 
         try {
-            List<Transaction> settledTransactions = settleTransactionsUseCase.settleAllPending();
+            SettleTransactionsUseCase.BatchSettlementResult result = settleTransactionsUseCase.settleAllPending();
 
             String batchId = "AUTO-SETTLEMENT-" + UUID.randomUUID().toString().substring(0, 8);
 
             SettlementResponse response = settlementMapper.toSettlementResponse(
                     batchId,
-                    settledTransactions,
-                    new ArrayList<>()
+                    result.settled(),
+                    result.failed()
             );
 
             log.info("Auto-settlement completed: {}, settled: {} transactions",
-                    batchId, settledTransactions.size());
+                    batchId, result.settled().size());
 
             return ResponseEntity.ok(response);
 

@@ -22,13 +22,14 @@ public class PaymentDomainService {
     private final AuthorizationPort authorizationPort;
 
     /**
-     * Validate and process a payment transaction
+     * Validate and process a debit transaction (PURCHASE or CASH_ADVANCE)
      */
     public Transaction processPayment(CardId cardId, CardData cardData, MerchantInfo merchantInfo,
-                                      TransactionAmount amount, PaymentMethod paymentMethod) {
+                                      TransactionAmount amount, PaymentMethod paymentMethod,
+                                      TransactionType type) {
 
-        log.info("Processing payment for card: {}, merchant: {}, amount: {}",
-                cardId, merchantInfo.getMerchantId(), amount);
+        log.info("Processing {} for card: {}, merchant: {}, amount: {}",
+                type, cardId, merchantInfo.getMerchantId(), amount);
 
         // 1. Validate card
         validateCard(cardId, cardData);
@@ -37,12 +38,12 @@ public class PaymentDomainService {
         validateMerchant(merchantInfo);
 
         // 3. Check available credit
-        checkAvailableCredit(cardId, amount.getEffectiveAmount());
+        checkAvailableCredit(cardId, amount.getEffectiveAmount(), type);
 
         // 4. Create transaction
-        Transaction transaction = Transaction.createPurchase(
-                cardId, cardData, merchantInfo, amount, paymentMethod
-        );
+        Transaction transaction = type == TransactionType.CASH_ADVANCE
+                ? Transaction.createCashAdvance(cardId, cardData, merchantInfo, amount, paymentMethod)
+                : Transaction.createPurchase(cardId, cardData, merchantInfo, amount, paymentMethod);
 
         // 5. Fraud check
         performFraudCheck(transaction);
@@ -50,12 +51,13 @@ public class PaymentDomainService {
         // 6. Request authorization
         AuthorizationCode authCode = requestAuthorization(transaction);
 
-        // 7. Reserve credit
-        creditLimitPort.reserveCredit(cardId, amount.getEffectiveAmount());
-
-        // 8. Authorize transaction
+        // 7. Authorize transaction (fails on a declined code, before touching the credit)
         Integer riskScore = fraudCheckPort.calculateRiskScore(transaction);
         transaction.authorize(authCode, riskScore);
+
+        // 8. Consume credit in card-limits
+        creditLimitPort.consumeCredit(cardId, amount.getEffectiveAmount(), type,
+                creditDescription(transaction));
 
         // 9. Approve transaction
         transaction.approve();
@@ -82,10 +84,11 @@ public class PaymentDomainService {
         );
 
         // 3. Auto-approve refunds (no authorization needed)
-        refundTransaction.approve();
+        refundTransaction.approveRefund(originalTransactionId);
 
-        // 4. Restore credit to card
-        creditLimitPort.restoreCredit(cardId, amount.getEffectiveAmount());
+        // 4. Give the credit back to the card
+        creditLimitPort.releaseCredit(cardId, amount.getEffectiveAmount(),
+                "Refund " + refundTransaction.getTransactionId() + " of " + originalTransactionId);
 
         log.info("Refund processed successfully: {}", refundTransaction.getTransactionId());
         return refundTransaction;
@@ -100,9 +103,10 @@ public class PaymentDomainService {
         // 1. Reverse the transaction
         transaction.reverse(reason);
 
-        // 2. Release reserved credit
+        // 2. Give the consumed credit back
         Money amount = transaction.getAmount().getEffectiveAmount();
-        creditLimitPort.releaseCredit(transaction.getCardId(), amount);
+        creditLimitPort.releaseCredit(transaction.getCardId(), amount,
+                "Reversal of " + transaction.getTransactionId() + ": " + reason);
 
         log.info("Transaction reversed successfully: {}", transaction.getTransactionId());
     }
@@ -120,28 +124,36 @@ public class PaymentDomainService {
             );
         }
 
-        // 1. Settle the transaction
+        // Settle the transaction. The credit was already consumed when it was approved
         transaction.settle();
 
-        // 2. Finalize credit consumption
-        Money amount = transaction.getAmount().getEffectiveAmount();
-        creditLimitPort.consumeCredit(transaction.getCardId(), amount);
-
         log.info("Transaction settled successfully: {}", transaction.getTransactionId());
+    }
+
+    /**
+     * Merchant that owns the terminal (ATM) used for a cash advance
+     */
+    public String resolveTerminalMerchant(String terminalId) {
+        return merchantValidationPort.findMerchantIdByTerminal(terminalId)
+                .orElseThrow(() -> MerchantValidationException.unknownTerminal(terminalId));
     }
 
     // ==================== Private validation methods ====================
 
     private void validateCard(CardId cardId, CardData cardData) {
-        if (!cardValidationPort.isCardActive(cardId)) {
-            throw CardValidationException.invalidStatus(cardId, "INACTIVE");
-        }
+        CardValidationPort.CardStatusSnapshot card = cardValidationPort.findCardStatus(cardId)
+                .orElseThrow(() -> CardValidationException.notFound(cardId));
 
-        if (cardValidationPort.isCardBlocked(cardId)) {
+        if (card.blocked()) {
             throw CardValidationException.blocked(cardId);
         }
 
-        if (cardData.isExpired()) {
+        if (!card.isActive()) {
+            throw CardValidationException.invalidStatus(cardId, card.status());
+        }
+
+        // Vencimiento según card-data y según la fecha que envía el cliente
+        if (card.expired() || cardData.isExpired()) {
             throw CardValidationException.expired(cardId);
         }
     }
@@ -161,11 +173,18 @@ public class PaymentDomainService {
         }
     }
 
-    private void checkAvailableCredit(CardId cardId, Money requestedAmount) {
-        if (!creditLimitPort.hasSufficientFunds(cardId, requestedAmount)) {
-            Money available = creditLimitPort.getAvailableCredit(cardId);
-            throw new InsufficientFundsException(cardId, requestedAmount, available);
+    private void checkAvailableCredit(CardId cardId, Money requestedAmount, TransactionType type) {
+        CreditLimitPort.CreditCheck check = creditLimitPort.checkCredit(cardId, requestedAmount, type);
+        if (!check.approved()) {
+            throw new InsufficientFundsException(cardId, requestedAmount, check.available(), check.reason());
         }
+    }
+
+    private static String creditDescription(Transaction transaction) {
+        MerchantInfo merchant = transaction.getMerchantInfo();
+        String merchantName = merchant.getMerchantName() != null ? merchant.getMerchantName() : merchant.getMerchantId();
+        return String.format("%s %s - %s", transaction.getType().getDisplayName(),
+                transaction.getTransactionId(), merchantName);
     }
 
     private void performFraudCheck(Transaction transaction) {

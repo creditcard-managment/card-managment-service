@@ -25,7 +25,7 @@ flowchart LR
     CLM -->|JPA lectura cards<br/>estado de la tarjeta| DB[(PostgreSQL)]
     CLM -->|JPA credit_limits<br/>credit_limit_history| DB
     LC[card-lifecycle :8083] -.->|JPA lectura credit_limits<br/>¿tiene límite?| DB
-    PP[payment-processing :8085] -.->|REST esperado<br/>/available /reserve /consume ...| CLM
+    PP[payment-processing :8085] -->|REST validate / consume<br/>release-credit| CLM
 ```
 
 - **Asigna** el límite a una tarjeta en estado `APPROVED` o `ISSUED`, antes de que se active.
@@ -33,7 +33,12 @@ flowchart LR
 - **Valida** si una compra o un adelanto entra en los límites, sin consumir crédito.
 - Registra en el **historial** cada asignación o cambio de límite.
 
-> La integración con `payment-processing` está rota hoy: ese servicio llama endpoints que `card-limits` no expone (ver §9).
+> `payment-processing` usa la API tal como está:
+> - **Antes de autorizar:** `validate/purchase` o `validate/cash-advance`.
+> - **Al aprobar:** `consume-purchase` o `consume-cash-advance`.
+> - **En reversos y devoluciones:** `release-credit`.
+>
+> Resuelve el `creditLimitId` con `GET /card/{cardId}` ([PAYMENT.md §7](PAYMENT.md)).
 
 ---
 
@@ -439,7 +444,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 |---|---|---|
 | `card-data` | `card-limits` lee `cards.status` y `cards.deleted` | Funciona (acoplamiento por base compartida) |
 | `card-lifecycle` | Lee `credit_limits` por `card_id` para decidir si se puede activar | La regla existe pero el endpoint de activación no la usa ([LIFECYCLE.md §9](LIFECYCLE.md)); además esa consulta no filtra `deleted` |
-| `payment-processing` | Debería consultar el disponible y reservar, consumir, liberar y restaurar crédito por REST | **Incompatible** (ver §9.1) |
+| `payment-processing` | Valida (`validate/*`), consume al aprobar (`consume-*`) y libera en reversos y devoluciones (`release-credit`) por REST | Funciona ([PAYMENT.md §7](PAYMENT.md)) |
 | `card-events` | Existen los topics `credit-limit.*` y clases vacías | `card-limits` no publica eventos |
 
 ---
@@ -448,26 +453,19 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 
 ### 9.1 Críticas
 
-1. **El contrato con `payment-processing` no coincide.** `payment-processing` (`CreditLimitAdapter`) llama:
-   - `GET /api/v1/credit-limits/{cardId}/available`
-   - `POST /api/v1/credit-limits/{cardId}/reserve`
-   - `POST /api/v1/credit-limits/{cardId}/release`
-   - `POST /api/v1/credit-limits/{cardId}/consume`
-   - `POST /api/v1/credit-limits/{cardId}/restore`
-
-   Ninguna de esas rutas existe, y usan `cardId` donde `card-limits` espera `creditLimitId`. Como el adapter captura el error y devuelve un disponible de `0 USD`, las consultas de fondos de los pagos dan siempre sin saldo.
-2. **Sin control de concurrencia.** `CreditLimitEntity` no tiene `@Version` y el flujo es leer → modificar → guardar. Dos consumos simultáneos sobre el mismo límite pueden pisarse (*lost update*) y permitir gastar más que el disponible.
-3. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda se rechaza con 422 (“Cannot operate on different currencies”).
+1. **Sin control de concurrencia.** `CreditLimitEntity` no tiene `@Version` y el flujo es leer → modificar → guardar. Dos consumos simultáneos sobre el mismo límite pueden pisarse (*lost update*) y permitir gastar más que el disponible.
+2. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda se rechaza con 422 (“Cannot operate on different currencies”).
 
 ### 9.2 Reglas de negocio
 
-4. **Adelantos no acumulativos.** No se registra cuánto se usó en adelantos: cada adelanto se compara contra el tope completo, así que varios adelantos pueden superarlo en total.
-5. **Liberar más de lo consumido da 500.** `releaseCredit` no valida que el pago sea ≤ consumido. El dominio lo deja pasar, pero el `CHECK chk_consumed_not_negative` de la migración V2 rechaza el `UPDATE` y el cliente recibe un 500 genérico en lugar de un 422 con un motivo claro.
-6. **Asignaciones bajas fallan.** Con el 30% por defecto, cualquier límite de compras menor a ARS 1.666,67 da un tope de adelantos menor al mínimo de ARS 500 y la asignación se rechaza. Tampoco se puede asignar sin adelantos: `0` se convierte en 30%.
-7. **No se valida el estado de la tarjeta al consumir ni al validar.** Una tarjeta bloqueada, cancelada o vencida puede seguir consumiendo crédito.
-8. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor, y no se valida diario ≤ mensual.
-9. **Sin reserva (hold).** Validar y consumir son operaciones separadas: no hay reserva de fondos ni confirmación posterior.
-10. **Sin registro de movimientos ni idempotencia.** Consumos y liberaciones no dejan historial (`description` se descarta) ni reciben un id de transacción para evitar duplicados.
+3. **Adelantos no acumulativos.** No se registra cuánto se usó en adelantos: cada adelanto se compara contra el tope completo, así que varios adelantos pueden superarlo en total.
+4. **Liberar más de lo consumido da 500.** `releaseCredit` no valida que el pago sea ≤ consumido. El dominio lo deja pasar, pero el `CHECK chk_consumed_not_negative` de la migración V2 rechaza el `UPDATE` y el cliente recibe un 500 genérico en lugar de un 422 con un motivo claro.
+5. **Asignaciones bajas fallan.** Con el 30% por defecto, cualquier límite de compras menor a ARS 1.666,67 da un tope de adelantos menor al mínimo de ARS 500 y la asignación se rechaza. Tampoco se puede asignar sin adelantos: `0` se convierte en 30%.
+6. **No se valida el estado de la tarjeta al consumir ni al validar.** Una tarjeta bloqueada, cancelada o vencida puede seguir consumiendo crédito.
+7. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor, y no se valida diario ≤ mensual.
+8. **Sin reserva (hold).** Validar y consumir son operaciones separadas: no hay reserva de fondos ni confirmación posterior.
+9. **Sin registro de movimientos ni idempotencia.** Consumos y liberaciones no dejan historial (`description` se descarta) ni reciben un id de transacción para evitar duplicados.
+10. **Liberar no devuelve el cupo diario ni el mensual.** `release-credit` modela el pago del resumen: sube el disponible y baja lo consumido, pero los acumulados del día y del mes quedan igual. Cuando `payment-processing` lo usa para un reverso o una devolución del mismo día, el cliente no recupera ese cupo diario.
 
 ### 9.3 Técnicas
 

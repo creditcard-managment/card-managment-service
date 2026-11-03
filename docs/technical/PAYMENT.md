@@ -8,14 +8,14 @@
 | Clase principal | `com.unisono.card.payment.PaymentApplication` |
 | Puerto | `8080` por defecto (`SERVER_PORT`); `8085` en docker-compose |
 | Base paths REST | `/api/v1/payments`, `/api/v1/refunds`, `/api/v1/reversals`, `/api/v1/settlements`, `/api/v1/transactions` |
-| Base de datos | PostgreSQL — tablas `transactions`, `transaction_items`, `transaction_receipts` |
+| Base de datos | PostgreSQL — tablas `transactions`, `transaction_items`, `transaction_receipts`; lee `merchants` y `payment_terminals` |
 | Mensajería | Kafka (productor) — topics `payment.*` |
 | Dependencias internas | `card-shared` (`Money`, `CardId`, `ExpirationDate`, …), `card-events` (`DomainEvent`) |
-| Integraciones REST | card-data, card-limits, servicio de comercios, servicio antifraude, autorizador (ver §7) |
+| Integraciones REST | card-data, card-limits, servicio antifraude y autorizador (ver §7) |
 | Perfiles | `payment` (docker-compose), `dev`, `prod` |
 | Swagger UI | `/swagger-ui.html` |
 
-> ⚠️ **Estado actual:** el módulo compila, pero ningún flujo de pago llega a completarse de punta a punta. Ver §10 antes de usar este servicio.
+> **Estado actual:** compras, adelantos, reversos, devoluciones y liquidación funcionan de punta a punta contra card-data y card-limits. El antifraude y el autorizador siguen siendo locales o simulados. Ver §10 para las limitaciones.
 
 ---
 
@@ -26,13 +26,12 @@
 ```mermaid
 flowchart LR
     POS[POS / e-commerce / ATM] -->|REST| PP[payment-processing]
-    PP -->|GET estado de tarjeta| CD[card-data :8081]
-    PP -->|disponible / reserve / consume<br/>release / restore| CLM[card-limits :8082]
-    PP -->|estado del comercio| MS[Servicio de comercios<br/>no existe en el repo]
+    PP -->|GET /cards/id| CD[card-data :8081]
+    PP -->|validate / consume<br/>release-credit| CLM[card-limits :8082]
     PP -->|risk score / velocity| FS[Servicio antifraude<br/>no existe en el repo]
     PP -->|autorización| AS[Autorizador externo<br/>simulado por defecto]
     PP -->|payment.*| K[(Kafka)]
-    PP --> DB[(PostgreSQL<br/>transactions)]
+    PP --> DB[(PostgreSQL<br/>transactions<br/>merchants · payment_terminals)]
 ```
 
 ---
@@ -65,8 +64,8 @@ com.unisono.card.payment
 └── infrastructure
     ├── adapter.input.rest   Payment, Refund, Reversal, Settlement, Transaction controllers;
     │                        GlobalExceptionHandler
-    ├── adapter.output       authorization, card, creditlimit, fraud, merchant (REST);
-    │                        event (Kafka); persistence (JPA)
+    ├── adapter.output       authorization, card, creditlimit, fraud (REST);
+    │                        merchant (JPA de solo lectura); event (Kafka); persistence (JPA)
     └── config               DatabaseConfig (DataSource + EMF + TxManager propios),
                              KafkaPaymentConfig, RestTemplateConfig, BeanConfig, OpenApiConfig
 ```
@@ -117,8 +116,9 @@ com.unisono.card.payment
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING: createPurchase / createRefund
+    [*] --> PENDING: createPurchase / createCashAdvance / createRefund
     PENDING --> AUTHORIZED: authorize(código aprobado)
+    PENDING --> APPROVED: approveRefund() (solo REFUND)
     PENDING --> DECLINED: decline()
     AUTHORIZED --> APPROVED: approve()
     AUTHORIZED --> DECLINED: decline()
@@ -133,11 +133,13 @@ stateDiagram-v2
 | Método | Precondición | Evento emitido |
 |---|---|---|
 | `createPurchase(...)` | — | `PaymentInitiated` |
+| `createCashAdvance(...)` | — | `PaymentInitiated` (tipo `CASH_ADVANCE`) |
 | `createRefund(...)` | — | `RefundInitiated` |
 | `authorize(code, risk)` | No final y código aprobado (`"00"`) | `PaymentAuthorized` |
 | `approve()` | Estado `AUTHORIZED` | `PaymentProcessed` |
+| `approveRefund(originalId)` | Tipo `REFUND` y estado `PENDING` (las devoluciones no pasan por el autorizador) | `RefundProcessed` |
 | `decline(reason)` | No final | `PaymentDeclined` |
-| `reverse(reason)` | `AUTHORIZED` o `APPROVED` | `PaymentReversed` |
+| `reverse(reason)` | `AUTHORIZED` o `APPROVED`; solo débitos (`PURCHASE`, `CASH_ADVANCE`), validado en `TransactionValidationService` | `PaymentReversed` |
 | `settle()` | `APPROVED` | `TransactionSettled` |
 | `complete()` | No final | `TransactionCompleted` |
 
@@ -171,7 +173,6 @@ sequenceDiagram
     participant AS as PaymentApplicationService
     participant DS as PaymentDomainService
     participant CD as card-data
-    participant MS as Comercios
     participant CL as card-limits
     participant FR as Antifraude
     participant AU as Autorizador
@@ -181,15 +182,16 @@ sequenceDiagram
     C->>AS: POST /payments/purchase
     AS->>AS: mapear + validar monto y método
     AS->>DS: processPayment(...)
-    DS->>CD: ¿activa? ¿bloqueada?  (+ vencimiento local)
-    DS->>MS: ¿comercio activo? (+ MCC)
-    DS->>CL: ¿fondos suficientes?
+    DS->>CD: GET /cards/{id}: existe, ACTIVE, no bloqueada, no vencida
+    DS->>DB: merchants: ¿existe y ACTIVE? (+ MCC)
+    DS->>CL: POST /validate/purchase (disponible, diario, mensual)
     DS->>DS: Transaction.createPurchase → PENDING
     DS->>FR: risk score (≥70 → fraude) + velocity
     DS->>AU: requestAuthorization
-    DS->>CL: reserveCredit
     DS->>FR: risk score (de nuevo)
-    DS->>DS: authorize → AUTHORIZED → approve → APPROVED
+    DS->>DS: authorize → AUTHORIZED (declinado → corta acá)
+    DS->>CL: POST /{creditLimitId}/consume-purchase
+    DS->>DS: approve → APPROVED
     AS->>DB: save
     AS->>K: PaymentInitiated, PaymentAuthorized, PaymentProcessed
     AS-->>C: 201 PaymentResponse
@@ -199,18 +201,21 @@ Puntos clave:
 
 - Cualquier validación fallida corta el flujo con una excepción **antes de persistir**: los rechazos **no quedan registrados** y no se emite `PaymentDeclined`.
 - La compra se autoriza y aprueba en un solo paso (no hay preautorización): termina en `APPROVED`, lista para liquidar.
-- El crédito se **reserva** al aprobar y se **consume** al liquidar.
+- El crédito se **consume** en card-limits al aprobar (baja el disponible y los acumulados diario y mensual), después de que el autorizador aprobó. Un reverso o una devolución lo **liberan**; liquidar no lo toca.
+- Si card-data o card-limits no responden, el pago no se procesa: **503** `SERVICE_UNAVAILABLE`.
 - Los eventos se publican **dentro de la transacción de base**, antes del commit.
 
 ### 4.2 Adelanto en efectivo
 
-`processCashAdvance` arma un `ProcessPaymentCommand` y llama a `processPurchase`. Para eso fija `merchantId = "ATM-<terminalId>"`, `merchantName = "ATM Cash Advance"` y `paymentMethod = CHIP`. La transacción resultante es de tipo **`PURCHASE`**, no `CASH_ADVANCE`.
+`processCashAdvance` busca el `terminalId` en `payment_terminals`: la terminal tiene que existir y estar `ACTIVE`, y su `merchant_id` (el operador del cajero) es el comercio de la transacción. Si no, responde **400** `MERCHANT_VALIDATION_FAILED` (`TERMINAL`).
+
+Después sigue el mismo flujo que la compra, con `merchantName = "ATM Cash Advance"` y `paymentMethod = CHIP`. La diferencia es el tipo: la transacción es **`CASH_ADVANCE`**, se valida con `POST /validate/cash-advance` y consume con `consume-cash-advance`, es decir, contra el tope de adelantos.
 
 ### 4.3 Reverso
 
-1. Carga la transacción → valida `AUTHORIZED`/`APPROVED`.
+1. Carga la transacción → valida que sea un débito (`PURCHASE`/`CASH_ADVANCE`) en `AUTHORIZED`/`APPROVED`. Una devolución no se puede reversar (400).
 2. Ejecuta `reverse(reason)` → `REVERSED`.
-3. Llama a `card-limits releaseCredit` → guarda → publica `PaymentReversed`.
+3. Llama a card-limits `release-credit` por el monto → guarda → publica `PaymentReversed`.
 
 `/auto` hace lo mismo con el motivo fijo `"Automatic reversal due to timeout or system error"`.
 
@@ -221,15 +226,15 @@ Puntos clave:
    - **Total:** igual al original.
    - **Parcial:** menor o igual al original.
 3. Valida la tarjeta.
-4. Crea una transacción `REFUND` y la aprueba.
-5. Llama a `card-limits restoreCredit` → guarda → publica `RefundInitiated` (+ `PaymentProcessed`).
+4. Crea una transacción `REFUND` y la aprueba con `approveRefund()` (`PENDING → APPROVED`, sin autorizador).
+5. Llama a card-limits `release-credit` → guarda → publica `RefundInitiated` y `RefundProcessed`.
 
-> Este es el flujo diseñado; hoy falla en el paso 4 (ver §10.1, punto 3).
+La devolución queda `APPROVED` y se liquida como cualquier otra transacción.
 
 ### 4.5 Liquidación
 
-- **Individual:** la transacción debe estar `APPROVED` y sin `settlementDate`. Ejecuta `settle()` → `SETTLED` → `card-limits consumeCredit` → guarda → `TransactionSettled`.
-- **Batch:** liquida cada id. Los que fallan se loguean y se omiten.
+- **Individual:** la transacción debe estar `APPROVED` y sin `settlementDate`. Ejecuta `settle()` → `SETTLED` → guarda → `TransactionSettled`. No llama a card-limits: el crédito ya se consumió al aprobar.
+- **Batch:** liquida cada id. Los que fallan (estado inválido o inexistentes) se loguean y se devuelven en `failedTransactionIds`; `status` es `PARTIAL` si hubo alguno y `totalTransactions` cuenta liquidadas + fallidas.
 - **all-pending:** liquida todas las `APPROVED` sin `settlementDate`.
 
 ### 4.6 Captura
@@ -334,11 +339,12 @@ Campos: `cardId`, `cardNumberToken`, `lastFourDigits`, `expirationDate`, `amount
 | `TransactionNotFoundException` | 404 | `TRANSACTION_NOT_FOUND` |
 | `InvalidTransactionException` | 400 | `INVALID_TRANSACTION` |
 | `TransactionAlreadyProcessedException` | 409 | `TRANSACTION_ALREADY_PROCESSED` |
-| `InsufficientFundsException` | 402 | `INSUFFICIENT_FUNDS` |
-| `CardValidationException` | 400 | `CARD_VALIDATION_FAILED` |
+| `InsufficientFundsException` | 402 | `INSUFFICIENT_FUNDS` (incluye el motivo de card-limits: disponible, diario, mensual o sin límite asignado) |
+| `CardValidationException` | 400 | `CARD_VALIDATION_FAILED` (tarjeta inexistente, bloqueada, no `ACTIVE` o vencida) |
 | `AuthorizationFailedException` | 402 | `AUTHORIZATION_FAILED` (response codes `51`, `59`, `62`, `03`) |
 | `FraudDetectedException` | 403 | `FRAUD_DETECTED` |
-| `MerchantValidationException` | 400 | `MERCHANT_VALIDATION_FAILED` |
+| `MerchantValidationException` | 400 | `MERCHANT_VALIDATION_FAILED` (comercio inexistente o no `ACTIVE`, terminal desconocida, MCC inválido) |
+| `ExternalServiceException` | 503 | `SERVICE_UNAVAILABLE` (card-data o card-limits no responden o responden 5xx) |
 | `ValidationException` de `card-shared` (incluye `InvalidValueObjectException`, p. ej. `expirationDate` mal formado o moneda inválida) | 400 | `INVALID_VALUE` |
 | `BusinessRuleException` de `card-shared` (p. ej. monedas distintas en `Money`) | 422 | `BUSINESS_RULE_VIOLATION` |
 | Otra `PaymentException` | 500 | `PAYMENT_ERROR` |
@@ -374,27 +380,30 @@ Campos: `cardId`, `cardNumberToken`, `lastFourDigits`, `expirationDate`, `amount
 
 ## 7. Integraciones salientes
 
-| Puerto | Llamada | URL por defecto (`services.*`) | ¿Existe el destino? |
+| Puerto | Destino | Llamadas | URL por defecto (`services.*`) |
 |---|---|---|---|
-| `CardValidationPort` | `GET /api/v1/cards/{cardId}/status` | `CARD_DATA_SERVICE_URL` = `http://localhost:8081` | **No**: card-data solo tiene `PUT /status`; para leer el estado está `GET /api/v1/cards/{id}` |
-| `CreditLimitPort` | `GET /api/v1/credit-limits/{cardId}/available`, `POST …/reserve`, `…/consume`, `…/release`, `…/restore` | `CARD_LIMITS_SERVICE_URL` = `http://localhost:8082` | **No** (ver [LIMITS.md §9.1](LIMITS.md)) |
-| `MerchantValidationPort` | `GET /api/v1/merchants/{id}/status` | `MERCHANT_SERVICE_URL` = `http://localhost:8080` | No hay servicio de comercios en el repo |
-| `FraudCheckPort` | `/api/v1/fraud/*` | `FRAUD_DETECTION_SERVICE_URL` = `http://localhost:8081` | No existe (`8081` es card-data) |
-| `AuthorizationPort` | `/api/v1/authorization/*` | `AUTHORIZATION_SERVICE_URL` = `http://localhost:8082` | No existe (`8082` es card-limits); simulado por defecto |
+| `CardValidationPort` | card-data | `GET /api/v1/cards/{cardId}` → `status`, `isBlocked`, `isExpired` | `CARD_DATA_SERVICE_URL` = `http://localhost:8081` |
+| `CreditLimitPort` | card-limits | `POST /api/v1/credit-limits/validate/purchase` · `…/validate/cash-advance`; `GET …/card/{cardId}` (resuelve el `creditLimitId`); `POST …/{creditLimitId}/consume-purchase` · `…/consume-cash-advance` · `…/release-credit` | `CARD_LIMITS_SERVICE_URL` = `http://localhost:8082` |
+| `MerchantValidationPort` | Base compartida | `merchants` (existe y `status = 'ACTIVE'`) y `payment_terminals` (terminal `ACTIVE` → `merchant_id`), por JPA de solo lectura | — |
+| `FraudCheckPort` | Servicio antifraude | `/api/v1/fraud/*` | `FRAUD_DETECTION_SERVICE_URL` = `http://localhost:8081` (no existe: `8081` es card-data) |
+| `AuthorizationPort` | Autorizador | `/api/v1/authorization/*` | `AUTHORIZATION_SERVICE_URL` = `http://localhost:8082` (no existe: `8082` es card-limits); simulado por defecto |
+
+No hay un servicio de comercios: `merchants` y `payment_terminals` (V4) se cargan directamente en la base. `MerchantEntity` y `PaymentTerminalEntity` son `@Immutable` y solo mapean las columnas que se leen.
 
 `RestTemplate`: timeouts de 5 s (conexión) y 10 s (lectura), con un interceptor que loguea URI y status.
 
-**Política ante fallos** (cada adapter captura las excepciones):
+**Política ante fallos:**
 
-| Chequeo | Si el servicio falla, asume… | Efecto |
+| Chequeo | Respuesta del destino | Efecto |
 |---|---|---|
-| Tarjeta activa | No activa | Rechaza |
-| Tarjeta bloqueada | Bloqueada | Rechaza |
-| Comercio activo | Inactivo | Rechaza |
-| Crédito disponible | `0 USD` | Rechaza |
-| Score de fraude | Score local | — |
-| Velocity, geolocalización, anomalía | Sin anomalía | No bloquea |
-| `reserve` / `consume` / `release` / `restore` | — | Lanza `RuntimeException` → 500 |
+| Tarjeta | 404 | 400 `CARD_VALIDATION_FAILED` (`EXISTENCE`) |
+| Tarjeta | Error de red o 5xx | 503 `SERVICE_UNAVAILABLE` |
+| Validación de crédito | `approved=false` | 402 `INSUFFICIENT_FUNDS` con el motivo |
+| Validación de crédito | 404 (sin límite asignado) | 402 `INSUFFICIENT_FUNDS` (`Card has no credit limit`) |
+| Consumo de crédito | 400 / 422 (el disponible cambió entre la validación y el consumo) | 402 `INSUFFICIENT_FUNDS` |
+| Crédito (cualquier llamada) | Error de red o 5xx | 503 `SERVICE_UNAVAILABLE` |
+| Score de fraude | Error | Score local |
+| Velocity, geolocalización, anomalía | Error | Sin anomalía, no bloquea |
 
 ---
 
@@ -427,7 +436,7 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 
 ### 9.1 Tablas (`ddl-auto: validate`)
 
-El esquema se crea con Flyway en el repo `card-management-database` (`migrations/V5__create_alter_table.sql`, `V6__create_table_items.sql`, `V7__create_receipt_table.sql`). `transactions.card_id` y `merchant_id` son `VARCHAR(36)` con FK a `cards(id)` y `merchants(id)`.
+El esquema se crea con Flyway en el repo `card-management-database` (`migrations/V5__create_alter_table.sql`, `V6__create_table_items.sql`, `V7__create_receipt_table.sql`). `transactions.card_id` y `merchant_id` son `VARCHAR(36)` con FK a `cards(id)` y `merchants(id)`. Las dos se cumplen porque, antes de guardar, la tarjeta se valida en card-data y el comercio en `merchants`. Un id de comercio inexistente o de más de 36 caracteres se rechaza con 400.
 
 **`transactions`**
 
@@ -447,6 +456,8 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 - **`transaction_items`:** detalle de ítems (descripción, cantidad, precio unitario, total).
 - **`transaction_receipts`:** comprobantes (`receipt_number` único `RCP-…`, tipo `DIGITAL|PRINTED|EMAIL|SMS`, `receipt_data` en **jsonb** vía hypersistence-utils, estado de entrega).
 
+**De solo lectura** (V4, las administra el módulo de comercios): `merchants` (`id`, `legal_name`, `trade_name`, `status`) y `payment_terminals` (`id`, `merchant_id`, `terminal_type`, `status`).
+
 El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tiene consultas de estadísticas, sospechosas, duplicados y volumen por comercio, que tampoco se exponen.
 
 ### 9.2 Configuración
@@ -465,42 +476,34 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 ### 9.3 Docker
 
-`services/payment-processing/Dockerfile` (multi-stage) y servicio `payment-processing-service` en compose: perfil `payment`, puerto `8085`, `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`, `depends_on: kafka`, `CARD_DATA_SERVICE_URL=http://card-data-service:8081` y `CARD_LIMITS_SERVICE_URL=http://card-limits-service:8082`. Las URLs de comercios, antifraude y autorizador quedan en sus defaults de `localhost`.
+`services/payment-processing/Dockerfile` (multi-stage) y servicio `payment-processing-service` en compose: perfil `payment`, puerto `8085`, `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`, `depends_on: kafka`, `CARD_DATA_SERVICE_URL=http://card-data-service:8081` y `CARD_LIMITS_SERVICE_URL=http://card-limits-service:8082`. Las URLs de antifraude y autorizador quedan en sus defaults de `localhost`.
 
 ---
 
 ## 10. Limitaciones conocidas y deuda técnica
 
-### 10.1 Bloqueantes
+### 10.1 Reglas de negocio
 
-1. **FK de `merchant_id`.** La migración V5 define `merchant_id → merchants(id)` y `card_id → cards(id)`. Una transacción solo se puede guardar si el comercio existe en `merchants`; los adelantos usan `merchantId = "ATM-<terminalId>"`, que no va a existir, y cualquier id de más de 36 caracteres excede la columna.
-2. **Las validaciones previas siempre rechazan.**
-   - `GET /api/v1/cards/{id}/status` no existe en card-data y la URL por defecto apunta a `8080` → `isCardActive=false` → toda compra termina en 400 `CARD_VALIDATION_FAILED`.
-   - Si se corrigiera eso, el servicio de comercios no existe (→ comercio inactivo) y card-limits no expone los endpoints esperados (→ disponible `0 USD`, 402).
-3. **Las devoluciones nunca funcionan.** `createRefund` deja la transacción en `PENDING` y `processRefund` llama a `approve()`, que exige `AUTHORIZED` → `InvalidTransactionException` (400).
-4. **Reversos y liquidaciones fallan:** dependen de `releaseCredit` y `consumeCredit` en card-limits, que no existen (500). En batch, los errores se capturan y la respuesta sale “exitosa” con 0 liquidadas (`failedTransactionIds` siempre vacío).
+1. **Los rechazos no se registran:** validaciones, fraude y autorización lanzan excepciones antes de `save()`. No queda la transacción `DECLINED` ni se emite `PaymentDeclined`, y la rama 402 del controller con `PaymentResponse` nunca se ejecuta.
+2. **Una autorización declinada se reporta mal:** el adapter devuelve un código declinado (no lanza excepción) y `authorize()` lo rechaza con `InvalidTransactionException` → 400 en lugar de 402 `AUTHORIZATION_FAILED`. El crédito no se toca: se consume después de autorizar.
+3. **PIN del adelanto sin verificar:** se pide en el request pero no se valida contra card-data (`POST /cards/{id}/validate-pin`).
+4. **CVV sin validar:** se recibe pero no se envía a nadie, aunque `ONLINE`/`MANUAL` lo requieren.
+5. **Devoluciones parciales sin control acumulado:** cada parcial se compara contra el original, no contra lo ya devuelto. Tampoco se persiste el vínculo con la transacción original.
+6. **Reverso y devolución no restauran los acumulados diario y mensual:** `release-credit` de card-limits modela el pago del resumen. Sube el disponible y baja lo consumido, pero no devuelve el cupo diario ni el mensual. Si la tarjeta ya pagó, devolver más de lo consumido choca con el `CHECK` de card-limits y responde 503 ([LIMITS.md](LIMITS.md)).
+7. **Captura inutilizable:** no hay flujo de preautorización; `authorizeTransaction` no hace nada y no tiene endpoint.
+8. **El score de fraude se calcula 2 o 3 veces por compra** (con 2–3 llamadas al servicio externo) y el valor guardado puede no ser el mismo que se evaluó.
+9. **Límite de 50.000 inconsistente:** el request admite hasta 50.000,00, pero el autorizador simulado declina con monto ≥ 50.000.
 
-### 10.2 Reglas de negocio
+### 10.2 Técnicas
 
-5. **Los rechazos no se registran:** validaciones, fraude y autorización lanzan excepciones antes de `save()`. No queda la transacción `DECLINED` ni se emite `PaymentDeclined`, y la rama 402 del controller con `PaymentResponse` nunca se ejecuta.
-6. **Una autorización declinada se reporta mal:** el adapter devuelve un código declinado (no lanza excepción) y `authorize()` lo rechaza con `InvalidTransactionException` → 400 en lugar de 402 `AUTHORIZATION_FAILED`. Además, eso ocurre **después** de `reserveCredit`, así que el crédito queda reservado sin transacción que lo libere.
-7. **El adelanto se procesa como compra:** el tipo queda `PURCHASE`, el PIN se pide pero no se verifica y no se aplican reglas propias (por ejemplo `validatePaymentMethod` con `CASH_ADVANCE`).
-8. **CVV sin validar:** se recibe pero no se envía a nadie, aunque `ONLINE`/`MANUAL` lo requieren.
-9. **Devoluciones parciales sin control acumulado:** cada parcial se compara contra el original, no contra lo ya devuelto. Tampoco se persiste el vínculo con la transacción original.
-10. **Captura inutilizable:** no hay flujo de preautorización; `authorizeTransaction` no hace nada y no tiene endpoint.
-11. **El vencimiento real no se valida:** se usa el `expirationDate` que envía el cliente. `isCardExpired()` del adapter siempre devuelve `false` y no se usa.
-12. **El score de fraude se calcula 2 o 3 veces por compra** (con 2–3 llamadas al servicio externo) y el valor guardado puede no ser el mismo que se evaluó.
-13. **Límite de 50.000 inconsistente:** el request admite hasta 50.000,00, pero el autorizador simulado declina con monto ≥ 50.000.
-
-### 10.3 Técnicas
-
-14. **Eventos antes del commit:** se publican dentro de `@Transactional`. Si el commit falla, ya salieron eventos de una transacción inexistente. No hay outbox.
-15. **Key Kafka = `eventId`:** no hay orden por transacción ni por tarjeta. Replication factor 2 con un broker en compose. Nadie consume estos topics.
-16. **URLs por defecto cruzadas:** comercios, antifraude y autorizador apuntan a `localhost:8080`, `8081` y `8082`, que son payment-processing, card-data y card-limits. Ninguno de esos servicios existe en el repo.
-17. **Base de datos distinta por defecto** (`card_management` vs `card_management_db`).
-18. **Configuración sin efecto:** Flyway, `fraud.velocity.*`, `spring.application.name: card-management-service` (nombre del proyecto padre, no del servicio).
-19. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `RefundProcessed`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
-20. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
-21. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
-22. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
-23. **Sin tests:** no existe `src/test`, aunque el `pom.xml` configura JaCoCo.
+10. **Consumo de crédito sin compensación:** card-limits se llama antes de `save()`. Si después falla el guardado o la publicación de eventos, el crédito queda consumido sin transacción que lo respalde. Lo mismo pasa con `release-credit` en reversos y devoluciones. No hay saga ni reintento.
+11. **Eventos antes del commit:** se publican dentro de `@Transactional`. Si el commit falla, ya salieron eventos de una transacción inexistente. No hay outbox.
+12. **Key Kafka = `eventId`:** no hay orden por transacción ni por tarjeta. Replication factor 2 con un broker en compose. Nadie consume estos topics.
+13. **URLs por defecto cruzadas:** antifraude y autorizador apuntan a `localhost:8081` y `8082`, que son card-data y card-limits. Ninguno de esos servicios existe en el repo.
+14. **Base de datos distinta por defecto** (`card_management` vs `card_management_db`).
+15. **Configuración sin efecto:** Flyway, `fraud.velocity.*`, `spring.application.name: card-management-service` (nombre del proyecto padre, no del servicio).
+16. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
+17. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
+18. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
+19. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
+20. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. Faltan los de controllers, persistencia (incluido el mapper por reflexión) y los servicios de aplicación de devolución y reverso.

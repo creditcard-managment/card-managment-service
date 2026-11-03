@@ -96,9 +96,6 @@ services:
   card-limits:
     url: ${CARD_LIMITS_SERVICE_URL:http://localhost:8082}
 
-  merchant:
-    url: ${MERCHANT_SERVICE_URL:http://localhost:8080}
-
   fraud-detection:
     url: ${FRAUD_DETECTION_SERVICE_URL:http://localhost:8081}
 

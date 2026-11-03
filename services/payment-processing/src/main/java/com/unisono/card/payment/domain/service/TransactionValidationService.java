@@ -66,6 +66,13 @@ public class TransactionValidationService {
      * Validate transaction can be reversed
      */
     public void validateCanReverse(Transaction transaction) {
+        if (!transaction.getType().isDebit()) {
+            throw new InvalidTransactionException(
+                    transaction.getTransactionId(),
+                    String.format("Transactions of type %s cannot be reversed", transaction.getType())
+            );
+        }
+
         if (!transaction.getStatus().canBeReversed()) {
             throw new InvalidTransactionException(
                     transaction.getTransactionId(),

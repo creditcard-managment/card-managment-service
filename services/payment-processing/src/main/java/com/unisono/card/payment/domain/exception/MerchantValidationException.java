@@ -18,6 +18,10 @@ public class MerchantValidationException extends PaymentException {
         return new MerchantValidationException(merchantId, "EXISTENCE", "Merchant not found");
     }
 
+    public static MerchantValidationException unknownTerminal(String terminalId) {
+        return new MerchantValidationException(terminalId, "TERMINAL", "Terminal not found or inactive");
+    }
+
     public static MerchantValidationException inactive(String merchantId) {
         return new MerchantValidationException(merchantId, "STATUS", "Merchant is inactive");
     }
