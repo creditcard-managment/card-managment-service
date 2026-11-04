@@ -196,7 +196,7 @@ sequenceDiagram
 | `retries` | 3 |
 | `enable.idempotence` | `true` |
 | `max.in.flight.requests.per.connection` | 5 |
-| Compresión / batching | `snappy`, `linger.ms=10`, `batch.size=16384` |
+| Compresión / batching | `lz4`, `linger.ms=10`, `batch.size=16384` |
 | Timeouts | `request.timeout.ms=5000`, `delivery.timeout.ms=10000`, `max.block.ms=5000` (acotados por debajo de la espera del relay, para que un envío fallido no se entregue más tarde y se duplique) |
 | Envío | `OutboxRelay`: síncrono por evento (`send(...).get(send-timeout-ms)`), en orden de inserción |
 
@@ -304,6 +304,5 @@ docker exec -it card-management-kafka kafka-console-consumer \
 6. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
 7. **Replication factor 2 con un solo broker:** `KafkaPaymentConfig` declara los topics de pago con `replicas=2`, que el broker único del compose no puede satisfacer. La creación por `KafkaAdmin` falla; los topics terminan creándose por auto-creación con la configuración por defecto.
 8. **Convenciones mezcladas:** `KafkaTopics.TRANSACTION_*` (`transaction.authorized`) no coincide con los topics que realmente usa `payment-processing` (`payment.processing.authorized`); los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados.
-9. **Bootstrap en Docker:** el compose no define `SPRING_KAFKA_BOOTSTRAP_SERVERS` para `card-data-service` ni para `card-lifecycle-service`, así que dentro de los contenedores apuntan a `localhost:9092` en lugar de `kafka:9092`. `payment-processing` sí lo resuelve, mediante el placeholder `${KAFKA_BOOTSTRAP_SERVERS}`.
-10. **Configuración ignorada en card-lifecycle:** las propiedades de deserialización del `application.yml` no se aplican (ver §5.2).
-11. **Sin tests de contrato** (serialización y deserialización ida y vuelta) en la librería.
+9. **Configuración ignorada en card-lifecycle:** las propiedades de deserialización del `application.yml` no se aplican (ver §5.2).
+10. **Sin tests de contrato** (serialización y deserialización ida y vuelta) en la librería.
