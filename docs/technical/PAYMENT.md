@@ -481,7 +481,7 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 
 **Productor:**
 
-- `acks=all`, idempotente, 3 reintentos, `snappy`, `linger.ms=10`, sin type headers.
+- `acks=all`, idempotente, 3 reintentos, `lz4`, `linger.ms=10`, sin type headers.
 - Key = `eventId`.
 - `KafkaPaymentConfig` declara los 10 topics con **3 particiones** (`KAFKA_TOPIC_PARTITIONS`) y **replication factor 2** (`KAFKA_TOPIC_REPLICATION_FACTOR`). En docker-compose, con un solo broker, el factor es 1: si supera la cantidad de brokers, los topics no se crean al arrancar (`InvalidReplicationFactorException`).
 - El envío es asíncrono: un error del broker solo se loguea.

@@ -16,6 +16,12 @@ public class TransitionContext implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    // Claves de additionalData para la emisión (las lee IssuanceGuard)
+    public static final String CARD_NUMBER = "cardNumber";
+    public static final String CVV = "cvv";
+    public static final String PIN = "pin";
+    public static final String EXPIRATION_DATE = "expirationDate";
+
     private final String reason;
     private final String performedBy;
     private final Map<String, Object> additionalData;

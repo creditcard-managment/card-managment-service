@@ -30,7 +30,7 @@ flowchart LR
 ```
 
 - **Crea** la tarjeta en estado `REQUESTED` y notifica al ecosistema vía Kafka.
-- **card-lifecycle** consume `card.created`, gestiona aprobación/emisión/activación y escribe de vuelta en `card-data` el nuevo estado, la fecha de activación y los datos generados en la emisión (PAN, CVV, PIN, vencimiento).
+- **card-lifecycle** consume `card.created`, gestiona aprobación, rechazo, emisión, activación, bloqueo y cancelación, y escribe de vuelta en `card-data` el nuevo estado, la fecha de activación, los datos generados en la emisión (PAN, CVV, PIN, vencimiento) y los motivos de bloqueo y cancelación. No escribe la tabla `cards` directamente.
 - **Expone** operaciones de seguridad (bloqueo, bloqueo por fraude, desbloqueo) y de PIN (validación y cambio).
 
 ---
@@ -72,6 +72,7 @@ com.unisono.card.data
 | `GetCardUseCase` | `CardManagementService` | `GET /{cardId}`, `GET /client/{clientId}`, `GET /search` |
 | `BlockCardUseCase` | `CardSecurityService` | `POST /{cardId}/block`, `POST /{cardId}/block-fraud` |
 | `UnblockCardUseCase` | `CardSecurityService` | `POST /{cardId}/unblock` |
+| `UpdateCardStatusUseCase` + métodos de `CardManagementService` | `CardManagementService` | `PUT /{cardId}/status`, `PUT /{cardId}/activated-at`, `PUT /{cardId}/card-data`, `POST /{cardId}/cancel` |
 | `ValidatePINUseCase` | `PINManagementService` | `POST /{cardId}/validate-pin` |
 | `ResetPINUseCase` | `PINManagementService` | `POST /{cardId}/reset-pin` |
 | `ValidateCVVUseCase` | `CVVValidationService` | `POST /{cardId}/validate-cvv` |
@@ -177,7 +178,11 @@ stateDiagram-v2
     ACTIVE --> BLOCKED_FRAUD: POST /block-fraud
     BLOCKED --> ACTIVE: POST /unblock
     BLOCKED_FRAUD --> ACTIVE: POST /unblock
-    ACTIVE --> CANCELLED
+    APPROVED --> CANCELLED: POST /cancel
+    ISSUED --> CANCELLED: POST /cancel
+    ACTIVE --> CANCELLED: POST /cancel
+    BLOCKED --> CANCELLED: POST /cancel
+    BLOCKED_FRAUD --> CANCELLED: POST /cancel
     ACTIVE --> EXPIRED
     REJECTED --> [*]
     CANCELLED --> [*]
@@ -258,8 +263,11 @@ Reciben DTOs validados con Bean Validation (`UpdateCardStatusRequest`, `UpdateAc
 | `PUT /{cardId}/status` | `{ "status": "APPROVED", "reason": "…" }` (`reason` opcional, máx. 500) | Cambia el estado validando la transición |
 | `PUT /{cardId}/activated-at` | `{ "activatedAt": "2026-11-02T10:15:30" }` | Fecha de activación (ISO-8601) |
 | `PUT /{cardId}/card-data` | `{ "cardNumber": "...", "cvv": "...", "pin": "...", "expirationMonth": 12, "expirationYear": 2030 }` | Carga datos de emisión; el PAN y el CVV se cifran y el PIN se hashea al persistir. PAN de 13–19 dígitos (+ Luhn), CVV de 3–4, PIN de 4, mes 1–12; el vencimiento no puede estar en el pasado ni a más de 10 años |
+| `POST /{cardId}/cancel` | `{ "reason": "Cliente solicitó cancelación" }` (obligatorio, máx. 500) | → `CANCELLED` validando la transición; guarda `cancelled_reason` y `cancelled_at`. A diferencia del resto de la tabla, responde **200** `CardResponse` |
 
 ### 4.2 Seguridad (`CardSecurityController`)
+
+`/block` y `/block-fraud` los consume `card-lifecycle` (que valida la transición y registra el historial antes de llamarlos). Llamarlos directamente cambia el estado **sin dejar historial** en `state_transitions`: la puerta de entrada para bloquear es `card-lifecycle` `POST /{cardId}/block`.
 
 | Método y ruta | Body | Resultado |
 |---|---|---|
@@ -388,7 +396,8 @@ sequenceDiagram
 
 1. `card-lifecycle` recibe `card.created` y, al aprobar, llama `PUT /{id}/status` con `APPROVED`.
 2. En la emisión genera PAN, CVV, PIN y vencimiento → `PUT /{id}/card-data` y luego `PUT /{id}/status` con `ISSUED`.
-3. En la activación → `PUT /{id}/status` con `ACTIVE` y `PUT /{id}/activated-at`.
+3. En la activación → `POST /{id}/validate-pin`, `PUT /{id}/status` con `ACTIVE` y `PUT /{id}/activated-at`.
+4. Rechazo → `PUT /{id}/status` con `REJECTED`; bloqueo → `POST /{id}/block` o `/block-fraud`; cancelación → `POST /{id}/cancel`.
 
 ### 5.3 Bloqueo / desbloqueo
 
@@ -526,7 +535,7 @@ Payload (JSON, sin headers de tipo):
 
 **Productor (`KafkaProducerConfig`):**
 - `acks=all`, `retries=3`, idempotencia habilitada, `max.in.flight=5`.
-- Compresión `snappy`, `linger.ms=10`, `batch.size=16384`.
+- Compresión `lz4` (snappy necesita glibc para su librería nativa; lz4 tiene respaldo en Java puro), `linger.ms=10`, `batch.size=16384`.
 - Timeouts acotados: `request.timeout.ms=5000`, `delivery.timeout.ms=10000` y `max.block.ms=5000`. El productor resuelve cada envío antes de que `OutboxRelay` deje de esperar (`send-timeout-ms`, 15 s). Así un envío fallido no queda en el buffer para entregarse más tarde y duplicarse con el reintento.
 
 **`OutboxRelay`:**
@@ -566,8 +575,8 @@ El perfil `card-data` (`application-card-data.yml`) agrega logging a archivo (`l
 
 ### 9.2 Docker
 
-- `services/card-data/Dockerfile`: build multi-stage (Maven 3.9.6 + Temurin 17 → `eclipse-temurin:17-jre-alpine`), usuario no root, `JAVA_OPTS` con G1GC y `MaxRAMPercentage=75`. El contexto de build es la raíz del repo.
-- `deploy/docker/docker-compose.yml`: servicio `card-data-service`, puerto `8081`, perfil `card-data`, conectado a `postgres` y Kafka en la red `card-network`.
+- `services/card-data/Dockerfile`: build multi-stage (Maven 3.9.6 + Temurin 17 → `eclipse-temurin:17-jre`, base Ubuntu, igual en todos los módulos), usuario no root, `JAVA_OPTS` con G1GC y `MaxRAMPercentage=75`. El contexto de build es la raíz del repo.
+- `deploy/docker/docker-compose.yml`: servicio `card-data-service`, puerto `8081`, perfil `card-data`, conectado a `postgres` y Kafka en la red `card-network`. Sobrescribe `SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092` (dentro de Docker `localhost` es el propio contenedor) y espera a que `kafka` esté *healthy*.
 
 ```bash
 docker compose -f deploy/docker/docker-compose.yml up -d card-data-service

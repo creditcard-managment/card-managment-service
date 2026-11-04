@@ -2,7 +2,6 @@ package com.unisono.card.lifecycle.infrastructure.statemachine.config;
 
 import com.unisono.card.lifecycle.domain.model.CardLifecycleEvent;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleState;
-import com.unisono.card.lifecycle.infrastructure.statemachine.action.*;
 import com.unisono.card.lifecycle.infrastructure.statemachine.guard.*;
 import com.unisono.card.lifecycle.infrastructure.statemachine.listener.StateMachineEventListener;
 import lombok.RequiredArgsConstructor;
@@ -24,7 +23,6 @@ import java.util.EnumSet;
  * - Eventos (Events)
  * - Transiciones (Transitions)
  * - Guardas (Guards)
- * - Acciones (Actions)
  */
 @Slf4j
 @Configuration
@@ -38,12 +36,8 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
     private final ActivationGuard activationGuard;
     private final BlockGuard blockGuard;
 
-    // Actions
-    private final ApprovalAction approvalAction;
-    private final IssuanceAction issuanceAction;
-    private final ActivationAction activationAction;
-    private final BlockAction blockAction;
-    private final CancellationAction cancellationAction;
+    // Sin actions: los efectos (llamadas a card-data) los ejecutan los servicios de
+    // aplicación cuando la máquina acepta el evento (ver LifecycleTransitionExecutor).
 
     // Listener
     private final StateMachineEventListener eventListener;
@@ -57,7 +51,7 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
             throws Exception {
         config
                 .withConfiguration()
-                .autoStartup(true)
+                .autoStartup(false) // SpringStateMachineAdapter la posiciona y arranca por evento
                 .listener(eventListener);
     }
 
@@ -95,7 +89,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .target(CardLifecycleState.APPROVED)
                 .event(CardLifecycleEvent.APPROVE)
                 .guard(approvalGuard)
-                .action(approvalAction)
                 .and()
 
                 // REQUESTED → REJECTED
@@ -115,7 +108,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .target(CardLifecycleState.ISSUED)
                 .event(CardLifecycleEvent.ISSUE)
                 .guard(issuanceGuard)
-                .action(issuanceAction)
                 .and()
 
                 // APPROVED → CANCELLED
@@ -123,7 +115,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .source(CardLifecycleState.APPROVED)
                 .target(CardLifecycleState.CANCELLED)
                 .event(CardLifecycleEvent.CANCEL)
-                .action(cancellationAction)
                 .and()
 
                 // ========================================
@@ -136,7 +127,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .target(CardLifecycleState.ACTIVE)
                 .event(CardLifecycleEvent.ACTIVATE)
                 .guard(activationGuard)
-                .action(activationAction)
                 .and()
 
                 // ISSUED → CANCELLED
@@ -144,7 +134,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .source(CardLifecycleState.ISSUED)
                 .target(CardLifecycleState.CANCELLED)
                 .event(CardLifecycleEvent.CANCEL)
-                .action(cancellationAction)
                 .and()
 
                 // ========================================
@@ -157,7 +146,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .target(CardLifecycleState.BLOCKED)
                 .event(CardLifecycleEvent.BLOCK)
                 .guard(blockGuard)
-                .action(blockAction)
                 .and()
 
                 // ACTIVE → BLOCKED_FRAUD
@@ -166,7 +154,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .target(CardLifecycleState.BLOCKED_FRAUD)
                 .event(CardLifecycleEvent.BLOCK_FRAUD)
                 .guard(blockGuard)
-                .action(blockAction)
                 .and()
 
                 // ACTIVE → EXPIRED
@@ -181,7 +168,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .source(CardLifecycleState.ACTIVE)
                 .target(CardLifecycleState.CANCELLED)
                 .event(CardLifecycleEvent.CANCEL)
-                .action(cancellationAction)
                 .and()
 
                 // ========================================
@@ -200,7 +186,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .source(CardLifecycleState.BLOCKED)
                 .target(CardLifecycleState.CANCELLED)
                 .event(CardLifecycleEvent.CANCEL)
-                .action(cancellationAction)
                 .and()
 
                 // ========================================
@@ -218,7 +203,6 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .withExternal()
                 .source(CardLifecycleState.BLOCKED_FRAUD)
                 .target(CardLifecycleState.CANCELLED)
-                .event(CardLifecycleEvent.CANCEL)
-                .action(cancellationAction);
+                .event(CardLifecycleEvent.CANCEL);
     }
 }

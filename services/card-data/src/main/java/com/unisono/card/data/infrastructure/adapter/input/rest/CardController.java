@@ -1,5 +1,6 @@
 package com.unisono.card.data.infrastructure.adapter.input.rest;
 
+import com.unisono.card.data.application.dto.request.CancelCardRequest;
 import com.unisono.card.data.application.dto.request.CreateCardRequest;
 import com.unisono.card.data.application.dto.request.UpdateActivatedAtRequest;
 import com.unisono.card.data.application.dto.request.UpdateCardDataRequest;
@@ -175,6 +176,31 @@ public class CardController {
         ));
 
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Cancelar tarjeta (usado por card-lifecycle)
+     */
+    @PostMapping("/{cardId}/cancel")
+    @Operation(summary = "Cancelar tarjeta",
+            description = "Cancela la tarjeta y registra motivo y fecha de cancelación")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Tarjeta cancelada"),
+            @ApiResponse(responseCode = "400", description = "Razón ausente"),
+            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada"),
+            @ApiResponse(responseCode = "422", description = "Transición a CANCELLED no permitida")
+    })
+    public ResponseEntity<CardResponse> cancelCard(
+            @Parameter(description = "ID de la tarjeta")
+            @PathVariable String cardId,
+
+            @Valid @RequestBody CancelCardRequest request
+    ) {
+        log.info("Cancelando tarjeta: {}", cardId);
+
+        Card card = cardManagementService.cancel(CardId.of(cardId), request.getReason());
+
+        return ResponseEntity.ok(mapper.toResponse(card));
     }
 
     /**

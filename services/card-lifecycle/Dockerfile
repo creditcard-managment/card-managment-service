@@ -20,12 +20,15 @@ COPY . .
 
 RUN mvn clean package -DskipTests -B --no-transfer-progress
 
-FROM eclipse-temurin:17-jre-alpine AS runtime
+FROM eclipse-temurin:17-jre AS runtime
 
-RUN apk add --no-cache curl
+# curl lo usa el healthcheck de docker-compose
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Después (BIEN - crear dir y asignar ownership antes de cambiar de usuario)
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Usuario no root; logs/ se crea con ownership antes de cambiar de usuario
+RUN groupadd --system appgroup && useradd --system --gid appgroup --no-create-home appuser
 RUN mkdir -p /app/logs && chown -R appuser:appgroup /app/logs
 USER appuser
 WORKDIR /app

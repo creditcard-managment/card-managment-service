@@ -8,9 +8,9 @@
 | Clase principal | `com.unisono.card.lifecycle.CardLifecycleApplication` |
 | Puerto | `8083` |
 | Base path REST | `/api/v1/card-lifecycle` |
-| Base de datos | PostgreSQL `card_management_db` — tabla propia `state_transitions`; lee/escribe `cards` y lee `credit_limits` |
+| Base de datos | PostgreSQL `card_management_db` — tabla propia `state_transitions`; lee `credit_limits`. No accede a `cards` (la modifica vía `card-data`) |
 | Mensajería | Kafka (consumidor) — topic `card.created`, grupo `card-lifecycle-consumer-group` |
-| Integración síncrona | REST hacia `card-data` (`card-data.base-url`, por defecto `http://localhost:8081`) |
+| Integración síncrona | REST hacia `card-data` (`card-data.base-url`, por defecto `http://localhost:8081`): lectura de estado, cambios de estado, datos de emisión, validación de PIN, bloqueo y cancelación |
 | Dependencias internas | `card-shared` (Value Objects, `CardStatus`, excepciones), `card-events` (eventos y topics) |
 | Librerías destacadas | Spring State Machine (`spring-statemachine-core`, `-data-jpa`) |
 | Swagger UI | `http://localhost:8083/swagger-ui.html` |
@@ -26,9 +26,8 @@ flowchart LR
     CD[card-data :8081] -->|card.created| K[(Kafka)]
     K -->|CardEventConsumer| CL[card-lifecycle :8083]
     Op[Operador / Backoffice] -->|REST /api/v1/card-lifecycle| CL
-    CL -->|PUT /status, /activated-at, /card-data<br/>approve · issue · activate| CD
-    CL -->|JPA directo sobre cards<br/>reject · block · cancel| DB[(PostgreSQL)]
-    CL -->|JPA lectura credit_limits| DB
+    CL -->|GET /cards/id · PUT /status, /activated-at, /card-data<br/>POST /validate-pin, /block, /block-fraud, /cancel| CD
+    CL -->|JPA lectura credit_limits| DB[(PostgreSQL)]
     CL -->|JPA state_transitions| DB
 ```
 
@@ -45,45 +44,64 @@ Hexagonal, con un componente adicional de Spring State Machine:
 ```
 com.unisono.card.lifecycle
 ├── domain
-│   ├── model        Card (vista reducida de la tarjeta), StateTransition,
-│   │                CardLifecycleState, CardLifecycleEvent, TransitionContext
+│   ├── model        StateTransition, CardLifecycleState, CardLifecycleEvent,
+│   │                TransitionContext
 │   ├── port.input   ApproveCard, RejectCard, IssueCard, ActivateCard, BlockCard,
 │   │                UnblockCard, CancelCard, GetLifecycleHistory
-│   ├── port.output  CardDataClient, CardPort, CreditLimitPort, StateTransitionRepository
-│   └── exception    InvalidStateTransitionException
+│   ├── port.output  CardDataClient, CreditLimitPort, StateTransitionRepository,
+│   │                LifecycleStateMachinePort
+│   └── exception    InvalidStateTransitionException, CardDataIntegrationException
 ├── application
-│   ├── service      ApproveCardService, IssueCardService, ActivateCardService,
-│   │                CardLifecycleService
+│   ├── service      ApproveCardService, RejectCardService, IssueCardService,
+│   │                ActivateCardService, BlockCardService, CancelCardService,
+│   │                LifecycleTransitionExecutor, CardLifecycleService (consultas)
 │   └── dto.response LifecycleHistoryResponse, StateTransitionResponse
 └── infrastructure
-    ├── adapter.input.rest     CardLifecycleController, DTOs, LifecycleDtoMapper
+    ├── adapter.input.rest     CardLifecycleController, GlobalExceptionHandler, DTOs,
+    │                          LifecycleDtoMapper
     ├── adapter.input.event    CardEventConsumer (Kafka)
-    ├── adapter.output.card    CardDataRestClient (REST a card-data),
-    │                          CardAdapter + CardJpaEntity (JPA sobre cards)
+    ├── adapter.output.card    CardDataRestClient (REST a card-data)
     ├── adapter.output.creditlimit  CreditLimitAdapter (JPA sobre credit_limits)
     ├── adapter.output.persistence  StateTransitionRepositoryAdapter, entity, mapper
-    ├── statemachine           Config, Guards, Actions, Listener
+    ├── statemachine           SpringStateMachineAdapter, Config, Guards, Listener
     └── config                 KafkaConsumerConfig, RestClientConfig, SwaggerConfig
 ```
 
-### 2.1 Dos estrategias de escritura conviven
+### 2.1 Cómo se ejecuta una transición
 
-Según la operación, el módulo actualiza la tarjeta por caminos distintos:
+Todas las transiciones modifican la tarjeta **solo a través de `card-data`**; el módulo no escribe la tabla `cards`:
 
-| Operación | Servicio | Cómo modifica la tarjeta | Valida estado actual |
-|---|---|---|---|
-| Aprobar | `ApproveCardService` | REST → `card-data` | No (la valida card-data: 422) |
-| Emitir | `IssueCardService` | REST → `card-data` | No (la valida card-data: 422) |
-| Activar | `ActivateCardService` | REST → `card-data` | No (la valida card-data: 422) |
-| Rechazar | `CardLifecycleService` | JPA directo sobre `cards` (`CardAdapter`) | Sí (dominio `Card`) |
-| Bloquear / Bloquear por fraude | `CardLifecycleService` | JPA directo sobre `cards` | Sí |
-| Cancelar | `CardLifecycleService` | JPA directo sobre `cards` | Sí |
+| Operación | Servicio | Llamadas a `card-data` |
+|---|---|---|
+| Aprobar | `ApproveCardService` | `PUT /status` (`APPROVED`) |
+| Rechazar | `RejectCardService` | `PUT /status` (`REJECTED`) |
+| Emitir | `IssueCardService` | `PUT /card-data` + `PUT /status` (`ISSUED`) |
+| Activar | `ActivateCardService` | `POST /validate-pin` + `PUT /status` (`ACTIVE`) + `PUT /activated-at` |
+| Bloquear / Bloquear por fraude | `BlockCardService` | `POST /block` / `POST /block-fraud` (completan `block_reason`, `blocked_at`) |
+| Cancelar | `CancelCardService` | `POST /cancel` (completa `cancelled_reason`, `cancelled_at`) |
 
-`CardLifecycleService` también tiene `approveCard`, `issueCard` y `activateCard` (con validación de estado y, en la activación, del límite de crédito), pero el controller **no los usa**: llama a los servicios REST de la primera tabla.
+Todos delegan en `LifecycleTransitionExecutor`, que aplica siempre la misma secuencia:
+
+1. Lee el estado real de la tarjeta en `card-data` (`GET /api/v1/cards/{id}`).
+2. Dispara el evento en la state machine posicionada en ese estado (§2.2). Si no hay transición o un guard la rechaza, lanza `InvalidStateTransitionException` y **no se llama a `card-data`**.
+3. Ejecuta los efectos en `card-data` (cambio de estado, datos de emisión, PIN, fecha de activación).
+4. Registra la transición exitosa con el `fromState` real y el destino que devolvió la máquina.
+
+Si falla cualquier paso con una excepción de dominio, registra una transición fallida (`successful = false`, `to_state` = destino buscado, `error_message` = motivo) y relanza la excepción. Si la tarjeta no existe (404) no se registra nada, porque `state_transitions.card_id` tiene FK a `cards`. Los servicios **no son transaccionales**: cada guardado en `state_transitions` se confirma por separado, así que el registro del fallo no se revierte. Si el guardado del fallo también falla, se loguea y se propaga el error original.
+
+`CardLifecycleService` solo expone consultas del historial.
+
+`card-lifecycle` es la **única puerta de entrada** para cambiar el estado: los endpoints de `card-data` que usa son internos. Si alguien llama a `card-data` `/block` directamente, el cambio no queda en el historial (ver [DATA.md §4.2](DATA.md)).
 
 ### 2.2 Spring State Machine
 
-`CardStateMachineConfig` (`@EnableStateMachineFactory`) define estados, transiciones, guards y actions. Sin embargo **ningún componente obtiene ni dispara la state machine** (no se inyecta `StateMachineFactory` en ningún lado). Hoy es una **especificación declarativa del ciclo de vida** que documenta las transiciones previstas, no el mecanismo que las ejecuta. Ver §9.
+`CardStateMachineConfig` (`@EnableStateMachineFactory`, `autoStartup(false)`) define estados, transiciones, guards y actions. `SpringStateMachineAdapter` (implementación de `LifecycleStateMachinePort`) la ejecuta en todas las transiciones:
+
+- Por cada evento pide una máquina nueva a la `StateMachineFactory`, la resetea al estado real de la tarjeta y la arranca. La máquina **no persiste estado**: el dueño del estado sigue siendo `card-data`.
+- Envía el evento con los headers `cardId` (`CardId`) y `context` (`TransitionContext` con `reason`, `performedBy` y, en la emisión, PAN, CVV, PIN y vencimiento).
+- Si el resultado es `ACCEPTED` devuelve el estado destino. Si no, lanza `InvalidStateTransitionException` con el motivo que dejó el guard en la variable `guardRejection` del extended state o, si no hay transición para el evento, con `Transición inválida: no se puede ejecutar evento '<evento>' desde estado '<estado>'`.
+
+Las transiciones **no tienen actions**: los efectos los hacen los servicios de aplicación después de que la máquina acepta el evento. La state machine es más estricta que `card-data` en un caso: solo permite bloquear desde `ACTIVE` (`card-data` también acepta `ISSUED`).
 
 ---
 
@@ -135,33 +153,16 @@ stateDiagram-v2
     EXPIRED --> [*]
 ```
 
-**Guards** (definidos, hoy no se evalúan):
+**Guards**:
 
 | Guard | Regla |
 |---|---|
 | `ApprovalGuard` | Requiere `reason` y `performedBy` no vacíos |
 | `IssuanceGuard` | Requiere PAN, CVV, PIN y vencimiento; el vencimiento no puede estar vencido |
-| `ActivationGuard` | La tarjeta debe tener **límite de crédito asignado** en `credit_limits` |
+| `ActivationGuard` | La tarjeta debe tener **límite de crédito asignado** en `credit_limits` (`CreditLimitPort.canActivate`) |
 | `BlockGuard` | Requiere `reason` no vacío |
 
-### 3.4 Reglas efectivas en el dominio `Card` (lifecycle)
-
-La entidad `Card` del módulo es una vista reducida (`id`, `status`, `clientId`, PAN, CVV, `pinHash`, vencimiento) con sus propias validaciones. Son las reglas que **sí** se aplican en rechazo, bloqueo y cancelación:
-
-| Método | Origen permitido | Destino |
-|---|---|---|
-| `approve()` | `REQUESTED` | `APPROVED` |
-| `reject()` | `REQUESTED` | `REJECTED` |
-| `issue(pan, cvv, pinHash, exp)` | `APPROVED` (y datos completos, vencimiento vigente) | `ISSUED` |
-| `activate()` | `ISSUED` | `ACTIVE` |
-| `block()` | `ACTIVE` | `BLOCKED` |
-| `blockForFraud()` | `ACTIVE` | `BLOCKED_FRAUD` |
-| `unblock()` | `BLOCKED` (no `BLOCKED_FRAUD`) | `ACTIVE` |
-| `cancel()` | Cualquiera salvo `CANCELLED`, `REJECTED`, `EXPIRED` | `CANCELLED` |
-
-Una transición inválida lanza `IllegalStateException("Transición inválida: X → Y. Estado actual: Z")`.
-
-### 3.5 `StateTransition`
+### 3.4 `StateTransition`
 
 Registro de auditoría de cada cambio:
 
@@ -177,7 +178,7 @@ Registro de auditoría de cada cambio:
 | `successful` | `true` / `false` |
 | `errorMessage` | Detalle si falló |
 
-Factories: `createSuccessful(...)` y `createFailed(...)` (esta última con `toState = null`). `getDescription()` arma un texto legible, por ejemplo: `Tarjeta <id>: Solicitada → Aprobada (Evento: Aprobar) - Razón: … - Por: …`.
+Factories: `createSuccessful(...)` y `createFailed(...)`. Esta última guarda en `toState` el estado destino buscado (la columna es `NOT NULL`); `successful = false` indica que no se alcanzó. `getDescription()` arma un texto legible, por ejemplo: `Tarjeta <id>: Solicitada → Aprobada (Evento: Aprobar) - Razón: … - Por: …`.
 
 ---
 
@@ -191,7 +192,7 @@ Base: `/api/v1/card-lifecycle`. Todos los bodies se validan con Bean Validation.
 { "reason": "Cliente cumple con requisitos crediticios", "approvedBy": "admin@bank.com" }
 ```
 
-Ambos campos obligatorios. Llama a `card-data` `PUT /status` con `APPROVED` y registra `REQUESTED → APPROVED`.
+Ambos campos obligatorios. Lee el estado en `card-data`, valida `APPROVE` con la state machine (`ApprovalGuard`), llama a `PUT /status` con `APPROVED` y registra la transición con el estado origen real.
 
 Respuesta **200**:
 
@@ -205,7 +206,7 @@ Respuesta **200**:
 { "reason": "Cliente no cumple requisitos crediticios", "rejectedBy": "admin@bank.com" }
 ```
 
-Valida `REQUESTED → REJECTED` en dominio y actualiza `cards.status` directamente. Respuesta **200** sin cuerpo.
+Lee el estado en `card-data`, valida `REJECT` con la state machine (solo desde `REQUESTED`), llama a `PUT /status` con `REJECTED` y registra la transición. Respuesta **200** sin cuerpo.
 
 ### 4.3 `POST /{cardId}/issue` — Emitir
 
@@ -213,7 +214,7 @@ Valida `REQUESTED → REJECTED` en dominio y actualiza `cards.status` directamen
 {
   "cardNumber": "4532123456789012",
   "cvv": "123",
-  "pin": "1234",
+  "pin": "4821",
   "expirationMonth": 12,
   "expirationYear": 2028,
   "reason": "Emisión estándar de tarjeta aprobada",
@@ -225,20 +226,26 @@ Valida `REQUESTED → REJECTED` en dominio y actualiza `cards.status` directamen
 |---|---|
 | `cardNumber` | `^[0-9]{13,19}$` + Luhn (`CardNumber.of`) |
 | `cvv` | `^[0-9]{3,4}$` |
-| `pin` | `^[0-9]{4}$` |
+| `pin` | `^[0-9]{4}$`; `PIN.of` además rechaza secuencias obvias (`1234`, `0000`, …) con 400 |
 | `expirationMonth` | 1–12 |
 | `expirationYear` | ≥ 2025 |
 | `reason`, `issuedBy` | Obligatorios |
 
-Flujo: `card-data` `PUT /card-data` (PAN, CVV, PIN en claro, vencimiento — `card-data` cifra y hashea) → `PUT /status` con `ISSUED` → registra `APPROVED → ISSUED`. Respuesta **200** `CardLifecycleResponse` con `status: ISSUED`.
+Flujo: lee el estado en `card-data` → valida `ISSUE` con la state machine (`IssuanceGuard`) → `PUT /card-data` (PAN, CVV, PIN en claro, vencimiento — `card-data` cifra y hashea) → `PUT /status` con `ISSUED` → registra la transición. Respuesta **200** `CardLifecycleResponse` con `status: ISSUED`.
 
 ### 4.4 `POST /{cardId}/activate` — Activar
 
 ```json
-{ "pin": "1234", "reason": "Cliente solicitó activación vía app", "activatedBy": "cliente@email.com" }
+{ "pin": "4821", "reason": "Cliente solicitó activación vía app", "activatedBy": "cliente@email.com" }
 ```
 
-Los tres campos son obligatorios (`pin` de 4 dígitos), pero **el PIN no se verifica** (ver §9). Flujo: `PUT /status` con `ACTIVE` → `PUT /activated-at` con la hora actual → registra `ISSUED → ACTIVE`. Respuesta **200** `CardLifecycleResponse` con `status: ACTIVE`.
+Los tres campos son obligatorios (`pin` de 4 dígitos). Flujo:
+
+1. Lee el estado en `card-data` y valida `ACTIVATE` con la state machine: la tarjeta debe estar `ISSUED` y tener límite de crédito (`ActivationGuard`). Si falla → **422**.
+2. Verifica el PIN con `card-data` `POST /cards/{id}/validate-pin`. Si es incorrecto → **422** `PIN incorrecto: no se puede activar la tarjeta …`. El PIN se verifica **después** de la state machine para no consumir intentos en una activación que igual sería rechazada; cada PIN incorrecto suma un intento en `card-data`, que bloquea la tarjeta al llegar al máximo ([DATA.md](DATA.md)).
+3. `PUT /status` con `ACTIVE` → `PUT /activated-at` con la hora actual → registra la transición.
+
+Respuesta **200** `CardLifecycleResponse` con `status: ACTIVE`.
 
 ### 4.5 `POST /{cardId}/block` — Bloquear
 
@@ -246,7 +253,7 @@ Los tres campos son obligatorios (`pin` de 4 dígitos), pero **el PIN no se veri
 { "reason": "Tarjeta reportada como perdida", "blockedBy": "usuario@email.com", "blockType": "NORMAL" }
 ```
 
-`blockType`: `NORMAL` (por defecto, también si es `null`) o `FRAUD`. Valida `ACTIVE → BLOCKED` o `ACTIVE → BLOCKED_FRAUD` y actualiza `cards.status` directamente. Respuesta **200** sin cuerpo.
+`blockType`: `NORMAL` (por defecto, también si es `null`) o `FRAUD`. Valida `ACTIVE → BLOCKED` o `ACTIVE → BLOCKED_FRAUD` con la state machine (`BlockGuard`: `reason` obligatorio) y llama a `card-data` `POST /block` o `POST /block-fraud` con el motivo; `card-data` guarda `block_reason` y `blocked_at`. Respuesta **200** sin cuerpo.
 
 ### 4.6 `POST /{cardId}/cancel` — Cancelar
 
@@ -254,7 +261,7 @@ Los tres campos son obligatorios (`pin` de 4 dígitos), pero **el PIN no se veri
 { "reason": "Cliente solicitó cancelación", "cancelledBy": "cliente@email.com" }
 ```
 
-Cancela desde cualquier estado no final. Respuesta **200** sin cuerpo.
+Cancela desde `APPROVED`, `ISSUED`, `ACTIVE`, `BLOCKED` o `BLOCKED_FRAUD` (no desde `REQUESTED`: para eso está el rechazo). Valida con la state machine y llama a `card-data` `POST /cancel` con el motivo; `card-data` guarda `cancelled_reason` y `cancelled_at`. Respuesta **200** sin cuerpo.
 
 ### 4.7 `GET /{cardId}/history` — Historial
 
@@ -283,15 +290,16 @@ Lista vacía si la tarjeta no tiene transiciones (no devuelve 404).
 
 ### 4.8 Errores
 
-El módulo **no tiene `@RestControllerAdvice`**: los errores salen con el formato por defecto de Spring Boot (`timestamp`, `status`, `error`, `path`, y `message` porque `include-message: always`).
+`GlobalExceptionHandler` (`@RestControllerAdvice`) traduce las excepciones de dominio a `{ timestamp, status, error, message }`, el mismo formato que `card-data`. `CardDataRestClient` traduce a su vez las respuestas de `card-data`: 404 → `NotFoundException`, 400 → `ValidationException`, 409/422 → `BusinessRuleException` (con el `message` que devolvió `card-data`), cualquier otro error o falta de respuesta → `CardDataIntegrationException`.
 
-| Situación | Resultado actual |
+| Situación | Resultado |
 |---|---|
-| Body inválido (Bean Validation) | 400 |
-| Transición inválida (`IllegalStateException`) | 500 |
-| Tarjeta inexistente (`NotFoundException`) | 500 |
-| PAN/CVV/PIN inválido en `issue` (`ValidationException`) | 500 |
-| Error HTTP de `card-data` (`RestClientException`) | 500 |
+| Body inválido (Bean Validation) | 400 (formato por defecto de Spring Boot) |
+| PAN/CVV/PIN inválido (`ValidationException` / `InvalidValueObjectException`) | 400 |
+| Tarjeta inexistente (`NotFoundException`, local o 404 de `card-data`) | 404 |
+| Transición no permitida o rechazada por un guard (`InvalidStateTransitionException`) | 422 |
+| Regla de negocio (`BusinessRuleException`: PIN incorrecto, 409/422 de `card-data`) | 422 |
+| `card-data` caído o con error inesperado (`CardDataIntegrationException`) | 502 |
 
 ---
 
@@ -329,44 +337,53 @@ sequenceDiagram
     participant DB as state_transitions
 
     Op->>CL: POST /{id}/approve
+    CL->>CD: GET /cards/{id} (estado actual)
+    CL->>CL: state machine APPROVE [ApprovalGuard]
     CL->>CD: PUT /cards/{id}/status {APPROVED}
     CL->>DB: REQUESTED → APPROVED
 
     Op->>CL: POST /{id}/issue
+    CL->>CD: GET /cards/{id}
+    CL->>CL: state machine ISSUE [IssuanceGuard]
     CL->>CD: PUT /cards/{id}/card-data {PAN, CVV, PIN, exp}
     CL->>CD: PUT /cards/{id}/status {ISSUED}
     CL->>DB: APPROVED → ISSUED
 
     Op->>CL: POST /{id}/activate
+    CL->>CD: GET /cards/{id}
+    CL->>CL: state machine ACTIVATE [ActivationGuard: límite de crédito]
+    CL->>CD: POST /cards/{id}/validate-pin
     CL->>CD: PUT /cards/{id}/status {ACTIVE}
     CL->>CD: PUT /cards/{id}/activated-at {now}
     CL->>DB: ISSUED → ACTIVE
+
+    Note over CL,DB: Si cualquier paso falla: transición fallida<br/>(successful = false) y error 4xx/502 al cliente
 ```
 
-Las llamadas a `card-data` son síncronas con `RestTemplate` (sin timeouts ni reintentos configurados). La transición se registra **después** de que `card-data` respondió OK. El `fromState` registrado está fijo en el código (`REQUESTED`, `APPROVED`, `ISSUED`), no se lee del estado real.
+Las llamadas a `card-data` son síncronas con `RestTemplate` (sin timeouts ni reintentos configurados). La transición exitosa se registra **después** de que `card-data` respondió OK, con el `fromState` leído de `card-data`. `card-data` vuelve a validar la transición al recibir `PUT /status` (422 si no está permitida, [DATA.md §3.5](DATA.md)); ese rechazo también queda registrado como transición fallida.
 
 ### 5.3 Rechazo, bloqueo y cancelación
 
 ```mermaid
 sequenceDiagram
     participant Op as Operador
-    participant S as CardLifecycleService
-    participant A as CardAdapter (JPA cards)
+    participant CL as card-lifecycle
+    participant CD as card-data
     participant DB as state_transitions
 
-    Op->>S: reject / block / cancel
-    S->>A: findById(cardId)
-    S->>S: card.reject() / block() / blockForFraud() / cancel()
-    S->>A: save(card) → UPDATE cards.status
-    S->>DB: transición exitosa
-    Note over S,DB: Si falla: intenta guardar transición fallida y relanza
+    Op->>CL: POST /{id}/reject | /block | /cancel
+    CL->>CD: GET /cards/{id} (estado actual)
+    CL->>CL: state machine REJECT | BLOCK / BLOCK_FRAUD [BlockGuard] | CANCEL
+    CL->>CD: PUT /status {REJECTED} | POST /block, /block-fraud | POST /cancel
+    CL->>DB: transición exitosa (fromState real)
+    Note over CL,DB: Si falla: transición fallida y error 4xx/502
 ```
 
-Este camino **solo actualiza `cards.status`** (más datos de emisión si los tiene): no completa `block_reason`, `blocked_at`, `cancelled_reason` ni `cancelled_at`, que sí completa `card-data` en su propio endpoint de bloqueo.
+Mismo mecanismo que §5.2. Como el cambio lo hace `card-data` con sus métodos de dominio, quedan completos `block_reason`, `blocked_at`, `cancelled_reason` y `cancelled_at`.
 
 ### 5.4 Activación y límite de crédito
 
-La regla “no se activa una tarjeta sin límite de crédito” está implementada en `CreditLimitAdapter.canActivate()` (consulta `credit_limits.card_id`), en `ActivationGuard` y en `CardLifecycleService.activateCard()`. **Ninguno de los tres está en el camino que usa el endpoint** (`ActivateCardService`), así que hoy la regla no se aplica.
+La regla “no se activa una tarjeta sin límite de crédito” la aplica `ActivationGuard` en la state machine, que consulta `CreditLimitAdapter.canActivate()` (existencia de `credit_limits.card_id`). Si la tarjeta no tiene límite, la activación responde **422** con `No se puede activar la tarjeta: debe tener límite de crédito asignado. CardId: …`, queda registrada como transición fallida y no se llega a verificar el PIN ni a llamar a `card-data`.
 
 ---
 
@@ -394,19 +411,20 @@ Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, s
 
 | Tabla | Dueño | Uso en lifecycle | Columnas mapeadas |
 |---|---|---|---|
-| `cards` | `card-data` | Lectura y escritura (`CardJpaEntity`) | `id`, `client_id`, `status`, `deleted`, `card_number_encrypted`, `last_four_digits`, `cvv_encrypted`, `pin_hash`, `expiration_month`, `expiration_year` |
 | `credit_limits` | `card-limits` | Solo lectura (`CreditLimitJpaEntity`) | `id`, `card_id`, `purchase_limit_amount` |
 
+> `cards` (dueño `card-data`) no está mapeada en este módulo: se lee y modifica solo vía REST. La FK `state_transitions.card_id → cards(id)` sigue existiendo.
+>
 > **Esquema:** las tres tablas las crea Flyway desde el repo `card-management-database`: `cards` en V1, `credit_limits` en V2 y `state_transitions` en V3. Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que deben existir antes del arranque.
 >
-> En V3, `state_transitions.card_id` tiene FK a `cards(id)` (`ON DELETE CASCADE`), `to_state` es `NOT NULL` (lo que confirma el problema de las transiciones fallidas, §9 punto 7) y `event` es `varchar(50)` (la entidad declara 20).
+> En V3, `state_transitions.card_id` tiene FK a `cards(id)` (`ON DELETE CASCADE`), `to_state` es `NOT NULL` (por eso las transiciones fallidas guardan el destino buscado) y `event` es `varchar(50)` (la entidad declara 20).
 
 ---
 
 ## 7. Seguridad de datos sensibles
 
 - En el camino REST (emisión), el PAN, el CVV y el PIN viajan **en claro** en el body hacia `card-data`, que los cifra (AES-GCM) y hashea (BCrypt). No hay TLS ni autenticación entre servicios.
-- `CardAdapter` tiene un cifrado **placeholder** (`"ENCRYPTED_" + valor`) incompatible con el AES de `card-data` (ver §9).
+- El módulo no lee ni escribe PAN, CVV ni PIN en la base: el cifrado y el hash son responsabilidad exclusiva de `card-data`.
 - `Card.getLastFourDigits()` se usa para logs seguros.
 - La API no tiene autenticación ni autorización: `approvedBy`, `blockedBy`, etc. son texto libre que envía el cliente.
 
@@ -438,12 +456,12 @@ El perfil `card-lifecycle` (`application-card-lifecycle.yml`, activado por docke
 docker compose -f deploy/docker/docker-compose.yml up -d card-lifecycle-service
 ```
 
-> El compose no define `CARD_DATA_BASE_URL` ni `SPRING_KAFKA_BOOTSTRAP_SERVERS`: dentro del contenedor el servicio intentará llegar a `card-data` y a Kafka en `localhost` (ver §9).
+> Dentro de Docker `localhost` es el propio contenedor, así que el compose sobrescribe `SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092` y `CARD_DATA_BASE_URL=http://card-data-service:8081` (propiedad `card-data.base-url`). El servicio arranca cuando `kafka` y `card-data-service` están *healthy* (`depends_on`).
 
 ### 8.3 Observabilidad
 
 - `GET /actuator/health`, `/actuator/metrics` (y `/actuator/prometheus` con el perfil).
-- `StateMachineEventListener` loguea arranque, cambios de estado, eventos no aceptados y errores de la state machine (sin efecto mientras la state machine no se use).
+- `StateMachineEventListener` loguea arranque, cambios de estado, eventos no aceptados y errores de la state machine (en aprobar, emitir y activar). Los guards loguean en `WARN` el motivo de cada rechazo.
 - Logs `com.unisono.card` en `DEBUG`.
 
 ---
@@ -452,18 +470,9 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-lifecycle-service
 
 Comportamientos actuales del código que conviene resolver:
 
-1. **La state machine no se ejecuta.** Guards, actions y listener están configurados, pero ningún servicio dispara eventos. Las reglas que solo están en la state machine (por ejemplo, los guards) no se aplican.
-2. **Aprobar, emitir y activar no manejan el rechazo de card-data.** Estos servicios no validan el estado y delegan en card-data, que sí valida la transición y responde **422** si no está permitida ([DATA.md §3.5](DATA.md)). card-lifecycle no captura ese error: `RestTemplate` lanza `HttpClientErrorException` y el cliente recibe **500**, sin transición fallida registrada. El `fromState` que se registra en los casos exitosos sigue siendo fijo y no se lee del estado real.
-3. **No se valida el límite de crédito al activar.** La regla existe en `CardLifecycleService.activateCard()` y en `ActivationGuard`, pero el endpoint usa `ActivateCardService`, que no la invoca.
-4. **El PIN de activación se pide y se ignora.** `ActivateCardRequest.pin` es obligatorio pero no se verifica contra `card-data` (`POST /cards/{id}/validate-pin`).
-5. **Bloquear o cancelar una tarjeta emitida falla.** `CardAdapter` “descifra” `card_number_encrypted` quitando el prefijo `ENCRYPTED_`, pero `card-data` guarda AES-GCM en Base64. `CardNumber.of(...)` rechaza ese texto (longitud y Luhn) y la operación devuelve 500. Si el formato llegara a ser compatible, `save()` además sobrescribiría el PAN y el CVV cifrados con el placeholder.
-6. **Escritura directa sobre `cards`.** Rechazo, bloqueo y cancelación saltean `card-data`: no se completan `block_reason`, `blocked_at`, `cancelled_reason` ni `cancelled_at`, y no pasan por sus reglas. Hay dos puertas de entrada para el bloqueo (`card-data /block` y `card-lifecycle /block`), y la de `card-data` no deja historial.
-7. **Las transiciones fallidas no se registran.** `createFailed` usa `toState = null`, pero la columna `to_state` es `NOT NULL`. Además, el guardado ocurre dentro de la misma transacción que luego se revierte al relanzar la excepción.
-8. **Sin desbloqueo.** No hay endpoint ni implementación de `UnblockCardUseCase`, aunque está previsto en la state machine y en el dominio.
-9. **Ports sin implementar:** `RejectCardUseCase`, `BlockCardUseCase`, `CancelCardUseCase`, `UnblockCardUseCase` y `GetLifecycleHistoryUseCase` son interfaces sin implementación (el controller usa `CardLifecycleService` directamente). `CardDataClient` existe, pero los servicios dependen de la clase concreta `CardDataRestClient`.
-10. **Consistencia entre servicios.** Emisión y activación hacen 2 llamadas REST seguidas: si la segunda falla, `card-data` queda a medio actualizar y no hay compensación. Si falla el guardado de la transición después de las llamadas, el cambio en `card-data` ya está hecho y no queda historial. `RestTemplate` no tiene timeouts.
-11. **Manejo del consumidor Kafka.** Al fallar no hace ack, pero tampoco relanza la excepción, así que el `DefaultErrorHandler` no actúa. El mensaje solo se reprocesa si el consumidor se reinicia antes de confirmar un offset posterior; si después llega un mensaje correcto, su ack confirma también el offset del fallido y el fallido se pierde.
-12. **Errores HTTP poco precisos.** Sin `@RestControllerAdvice`, una transición inválida o una tarjeta inexistente devuelven 500 en lugar de 409/422 o 404. `InvalidStateTransitionException` está definida pero no se usa.
-13. **docker-compose incompleto.** Faltan `CARD_DATA_BASE_URL` (por ejemplo `http://card-data-service:8081`) y `SPRING_KAFKA_BOOTSTRAP_SERVERS`, y no hay `depends_on`, así que dentro del contenedor los defaults apuntan a `localhost`.
-14. **Código muerto:** `hashPin()` en el controller, `LifecycleDtoMapper.toIssueCardCommand` y su record interno, `application/dto/response/LifecycleHistoryResponse` (duplicado del DTO REST), `TransitionContext`, `StateMachineActionConfig` (vacío) y las propiedades `card-lifecycle.*` del perfil.
-15. **Sin tests.** El módulo no tiene `src/test`, aunque `spring-statemachine-test` está declarado en el `pom.xml`.
+1. **Sin desbloqueo.** No hay endpoint ni implementación de `UnblockCardUseCase`, aunque está previsto en la state machine y en el dominio.
+2. **Ports sin implementar:** `UnblockCardUseCase` y `GetLifecycleHistoryUseCase` son interfaces sin implementación (el historial se consulta con `CardLifecycleService` directamente).
+3. **Consistencia entre servicios.** Emisión y activación hacen varias llamadas REST de escritura seguidas: si la segunda falla, `card-data` queda a medio actualizar y no hay compensación. Si falla el guardado de la transición después de las llamadas, el cambio en `card-data` ya está hecho y no queda historial. `RestTemplate` no tiene timeouts.
+4. **Manejo del consumidor Kafka.** Al fallar no hace ack, pero tampoco relanza la excepción, así que el `DefaultErrorHandler` no actúa. El mensaje solo se reprocesa si el consumidor se reinicia antes de confirmar un offset posterior; si después llega un mensaje correcto, su ack confirma también el offset del fallido y el fallido se pierde.
+5. **Código muerto:** `hashPin()` en el controller, `LifecycleDtoMapper.toIssueCardCommand` y su record interno, `application/dto/response/LifecycleHistoryResponse` (duplicado del DTO REST), `StateMachineActionConfig` (vacío) y las propiedades `card-lifecycle.*` del perfil.
+6. **Cobertura de tests parcial.** Hay tests del consumidor Kafka, de la state machine con sus guards (`SpringStateMachineAdapterTest`), del cliente REST (`CardDataRestClientTest`), de la activación (`ActivateCardServiceTest`) y de rechazo, bloqueo y cancelación (`BlockAndCancelServicesTest`); faltan los de aprobación, emisión y del controller.

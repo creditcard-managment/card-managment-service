@@ -29,7 +29,7 @@ public class IssueCardRequest {
 
     @NotBlank(message = "El PIN es obligatorio")
     @Pattern(regexp = "^[0-9]{4}$", message = "PIN inválido (4 dígitos)")
-    @Schema(description = "PIN", example = "1234")
+    @Schema(description = "PIN (no se admiten secuencias obvias como 1234)", example = "4821")
     private String pin;
 
     @NotNull(message = "El mes de vencimiento es obligatorio")

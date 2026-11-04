@@ -10,6 +10,8 @@ import org.springframework.statemachine.StateContext;
 import org.springframework.statemachine.guard.Guard;
 import org.springframework.stereotype.Component;
 
+import static com.unisono.card.lifecycle.infrastructure.statemachine.SpringStateMachineAdapter.HEADER_CARD_ID;
+
 /**
  * Guard para validar activación de tarjeta
  *
@@ -24,22 +26,18 @@ public class ActivationGuard implements Guard<CardLifecycleState, CardLifecycleE
 
     @Override
     public boolean evaluate(StateContext<CardLifecycleState, CardLifecycleEvent> context) {
-        CardId cardId = (CardId)context.getMessageHeader("cardId");
+        CardId cardId = (CardId) context.getMessageHeader(HEADER_CARD_ID);
 
         if (cardId == null) {
-            log.warn("No cardId provided for activation");
-            return false;
+            return GuardRejection.reject(context, "No se informó la tarjeta a activar");
         }
 
-        // Validar que tenga límite de crédito asignado
-        boolean hasLimit = creditLimitPort.hasLimitAssigned(cardId);
-
-        if (!hasLimit) {
-            log.warn("Cannot activate card without credit limit: {}", cardId);
-            return false;
+        if (!creditLimitPort.canActivate(cardId)) {
+            return GuardRejection.reject(context,
+                    "No se puede activar la tarjeta: debe tener límite de crédito asignado. CardId: " + cardId.getValue());
         }
 
-        log.debug("Activation guard passed for card: {}", cardId);
+        log.debug("Activation guard passed for card: {}", cardId.getValue());
         return true;
     }
 }

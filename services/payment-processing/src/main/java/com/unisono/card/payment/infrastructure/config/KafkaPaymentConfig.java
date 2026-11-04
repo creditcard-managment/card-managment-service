@@ -33,7 +33,7 @@ public class KafkaPaymentConfig {
     @Value("${spring.kafka.producer.retries:3}")
     private Integer retries;
 
-    @Value("${spring.kafka.producer.compression-type:snappy}")
+    @Value("${spring.kafka.producer.compression-type:lz4}")
     private String compressionType;
 
     @Value("${spring.kafka.topics.partitions:3}")

@@ -20,8 +20,8 @@ public class ActivateCardRequest {
 
     @NotBlank(message = "El PIN es obligatorio")
     @Pattern(regexp = "^\\d{4}$", message = "El PIN debe ser exactamente 4 dígitos numéricos")
-    @Schema(description = "PIN de 4 dígitos", example = "1234")
-    private String pin; // ✅ AGREGAR ESTE CAMPO
+    @Schema(description = "PIN de 4 dígitos; se verifica contra card-data", example = "4821")
+    private String pin;
     @NotBlank(message = "La razón es obligatoria")
     @Schema(description = "Razón de activación", example = "Cliente solicitó activación vía app")
     private String reason;

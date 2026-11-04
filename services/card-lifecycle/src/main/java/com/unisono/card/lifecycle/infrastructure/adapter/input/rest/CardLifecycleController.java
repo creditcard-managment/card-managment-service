@@ -4,7 +4,10 @@ import com.unisono.card.lifecycle.application.service.CardLifecycleService;
 import com.unisono.card.lifecycle.domain.model.StateTransition;
 import com.unisono.card.lifecycle.domain.port.input.ActivateCardUseCase;
 import com.unisono.card.lifecycle.domain.port.input.ApproveCardUseCase;
+import com.unisono.card.lifecycle.domain.port.input.BlockCardUseCase;
+import com.unisono.card.lifecycle.domain.port.input.CancelCardUseCase;
 import com.unisono.card.lifecycle.domain.port.input.IssueCardUseCase;
+import com.unisono.card.lifecycle.domain.port.input.RejectCardUseCase;
 import com.unisono.card.lifecycle.infrastructure.adapter.input.rest.dto.*;
 import com.unisono.card.lifecycle.infrastructure.adapter.input.rest.mapper.LifecycleDtoMapper;
 import com.unisono.card.shared.domain.valueobject.*;
@@ -34,6 +37,9 @@ public class CardLifecycleController {
     private final IssueCardUseCase issueCardUseCase;
     private final ApproveCardUseCase approveCardUseCase;
     private final ActivateCardUseCase activateCardUseCase;
+    private final RejectCardUseCase rejectCardUseCase;
+    private final BlockCardUseCase blockCardUseCase;
+    private final CancelCardUseCase cancelCardUseCase;
 
     // =============================================
     // ENDPOINTS DE TRANSICIÓN DE ESTADO
@@ -44,7 +50,8 @@ public class CardLifecycleController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Tarjeta aprobada exitosamente"),
             @ApiResponse(responseCode = "400", description = "Datos inválidos"),
-            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada")
+            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada"),
+            @ApiResponse(responseCode = "422", description = "Transición no permitida desde el estado actual")
     })
     public ResponseEntity<CardLifecycleResponse> approveCard(
             @Parameter(description = "ID de la tarjeta") @PathVariable String cardId,
@@ -81,16 +88,24 @@ public class CardLifecycleController {
     ) {
         log.info("REST: Rechazando tarjeta: {}", cardId);
 
-        lifecycleService.rejectCard(
+        rejectCardUseCase.execute(new RejectCardUseCase.RejectCardCommand(
                 CardId.of(cardId),
                 request.getReason(),
                 request.getRejectedBy()
-        );
+        ));
 
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/{cardId}/issue")
+    @Operation(summary = "Emitir tarjeta", description = "Asigna PAN, CVV, PIN y vencimiento (APPROVED → ISSUED)")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Tarjeta emitida exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Datos inválidos"),
+            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada"),
+            @ApiResponse(responseCode = "422", description = "Transición no permitida o rechazada por un guard"),
+            @ApiResponse(responseCode = "502", description = "card-data no disponible o con error inesperado")
+    })
     public ResponseEntity<CardLifecycleResponse> issueCard(
             @PathVariable String cardId,
             @Valid @RequestBody IssueCardRequest request) {
@@ -130,16 +145,25 @@ public class CardLifecycleController {
     }
 
     @PostMapping("/{cardId}/activate")
+    @Operation(summary = "Activar tarjeta",
+            description = "Verifica PIN y límite de crédito y activa la tarjeta (ISSUED → ACTIVE)")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Tarjeta activada exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Datos inválidos"),
+            @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada"),
+            @ApiResponse(responseCode = "422", description = "Transición no permitida, sin límite de crédito o PIN incorrecto"),
+            @ApiResponse(responseCode = "502", description = "card-data no disponible o con error inesperado")
+    })
     public ResponseEntity<CardLifecycleResponse> activateCard(
             @PathVariable String cardId,
             @Valid @RequestBody ActivateCardRequest request) {
 
         log.info("REST: Activando tarjeta: {}", cardId);
 
-        // ✅ Crear Command (sin PIN en el Command)
         ActivateCardUseCase.ActivateCardCommand command =
                 new ActivateCardUseCase.ActivateCardCommand(
                         CardId.of(cardId),
+                        PIN.of(request.getPin()),
                         request.getReason(),
                         request.getActivatedBy()
                 );
@@ -164,36 +188,35 @@ public class CardLifecycleController {
     ) {
         log.info("REST: Bloqueando tarjeta: {}", cardId);
 
+        BlockCardUseCase.BlockCardCommand command = new BlockCardUseCase.BlockCardCommand(
+                CardId.of(cardId),
+                request.getReason(),
+                request.getBlockedBy()
+        );
+
         if ("FRAUD".equalsIgnoreCase(request.getBlockType())) {
-            lifecycleService.blockCardForFraud(
-                    CardId.of(cardId),
-                    request.getReason(),
-                    request.getBlockedBy()
-            );
+            blockCardUseCase.executeBlockFraud(command);
         } else {
-            lifecycleService.blockCard(
-                    CardId.of(cardId),
-                    request.getReason(),
-                    request.getBlockedBy()
-            );
+            blockCardUseCase.executeBlock(command);
         }
 
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/{cardId}/cancel")
-    @Operation(summary = "Cancelar tarjeta", description = "Cancela una tarjeta (ANY → CANCELLED)")
+    @Operation(summary = "Cancelar tarjeta",
+            description = "Cancela una tarjeta aprobada, emitida, activa o bloqueada (→ CANCELLED)")
     public ResponseEntity<Void> cancelCard(
             @PathVariable String cardId,
             @Valid @RequestBody CancelCardRequest request
     ) {
         log.info("REST: Cancelando tarjeta: {}", cardId);
 
-        lifecycleService.cancelCard(
+        cancelCardUseCase.execute(new CancelCardUseCase.CancelCardCommand(
                 CardId.of(cardId),
                 request.getReason(),
                 request.getCancelledBy()
-        );
+        ));
 
         return ResponseEntity.ok().build();
     }
