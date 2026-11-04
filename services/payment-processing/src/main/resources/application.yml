@@ -47,7 +47,7 @@ spring:
     producer:
       acks: all
       retries: 3
-      compression-type: snappy
+      compression-type: lz4
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       properties:

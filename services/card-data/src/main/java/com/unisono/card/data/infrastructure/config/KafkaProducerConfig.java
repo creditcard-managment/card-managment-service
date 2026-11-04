@@ -56,7 +56,8 @@ public class KafkaProducerConfig {
         configProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5000);
 
         // Configuración de performance
-        configProps.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "snappy");
+        // lz4: si la librería nativa no carga, cae a una implementación Java pura (snappy falla sin glibc)
+        configProps.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "lz4");
         configProps.put(ProducerConfig.LINGER_MS_CONFIG, 10);
         configProps.put(ProducerConfig.BATCH_SIZE_CONFIG, 16384);
 
