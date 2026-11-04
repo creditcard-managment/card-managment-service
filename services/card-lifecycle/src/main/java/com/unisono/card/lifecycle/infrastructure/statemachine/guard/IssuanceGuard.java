@@ -1,66 +1,46 @@
 package com.unisono.card.lifecycle.infrastructure.statemachine.guard;
 
-
 import com.unisono.card.lifecycle.domain.model.CardLifecycleEvent;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleState;
 import com.unisono.card.lifecycle.domain.model.TransitionContext;
-import com.unisono.card.shared.domain.valueobject.CVV;
-import com.unisono.card.shared.domain.valueobject.CardNumber;
 import com.unisono.card.shared.domain.valueobject.ExpirationDate;
-import com.unisono.card.shared.domain.valueobject.PIN;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.statemachine.StateContext;
 import org.springframework.statemachine.guard.Guard;
 import org.springframework.stereotype.Component;
 
+import static com.unisono.card.lifecycle.domain.model.TransitionContext.*;
+import static com.unisono.card.lifecycle.infrastructure.statemachine.guard.GuardRejection.*;
+
 /**
- * Guard para validar emisión de tarjeta
+ * Guard para validar emisión de tarjeta.
+ * Espera en el {@link TransitionContext} los datos de emisión (PAN, CVV, PIN y vencimiento).
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class IssuanceGuard implements Guard<CardLifecycleState, CardLifecycleEvent> {
 
     @Override
     public boolean evaluate(StateContext<CardLifecycleState, CardLifecycleEvent> context) {
-        TransitionContext transitionContext = (TransitionContext)context.getMessageHeader("context");
+        TransitionContext transitionContext = transitionContext(context);
 
         if (transitionContext == null) {
-            log.warn("No transition context provided for issuance");
-            return false;
+            return reject(context, "No se informó el contexto de la emisión");
         }
-
-        // Validar que tenga todos los datos necesarios para emitir
-        CardNumber cardNumber = (CardNumber) transitionContext.get("cardNumber");
-        CVV cvv = (CVV) transitionContext.get("cvv");
-        PIN pin = (PIN) transitionContext.get("pin");
-        ExpirationDate expirationDate = (ExpirationDate) transitionContext.get("expirationDate");
-
-        if (cardNumber == null) {
-            log.warn("Issuance requires card number");
-            return false;
+        if (transitionContext.get(CARD_NUMBER) == null) {
+            return reject(context, "La emisión requiere el número de tarjeta");
         }
-
-        if (cvv == null) {
-            log.warn("Issuance requires CVV");
-            return false;
+        if (transitionContext.get(CVV) == null) {
+            return reject(context, "La emisión requiere el CVV");
         }
-
-        if (pin == null) {
-            log.warn("Issuance requires PIN");
-            return false;
+        if (transitionContext.get(PIN) == null) {
+            return reject(context, "La emisión requiere el PIN");
         }
-
-        if (expirationDate == null) {
-            log.warn("Issuance requires expiration date");
-            return false;
+        if (!(transitionContext.get(EXPIRATION_DATE) instanceof ExpirationDate expirationDate)) {
+            return reject(context, "La emisión requiere la fecha de vencimiento");
         }
-
-        // Validar que la fecha de vencimiento no esté vencida
         if (expirationDate.isExpired()) {
-            log.warn("Cannot issue card with expired date");
-            return false;
+            return reject(context, "No se puede emitir una tarjeta con fecha de vencimiento vencida");
         }
 
         log.debug("Issuance guard passed");

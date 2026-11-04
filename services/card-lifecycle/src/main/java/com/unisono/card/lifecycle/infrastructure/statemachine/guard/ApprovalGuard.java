@@ -3,39 +3,32 @@ package com.unisono.card.lifecycle.infrastructure.statemachine.guard;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleEvent;
 import com.unisono.card.lifecycle.domain.model.CardLifecycleState;
 import com.unisono.card.lifecycle.domain.model.TransitionContext;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.statemachine.StateContext;
 import org.springframework.statemachine.guard.Guard;
 import org.springframework.stereotype.Component;
+
+import static com.unisono.card.lifecycle.infrastructure.statemachine.guard.GuardRejection.*;
 
 /**
  * Guard para validar aprobación de tarjeta
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ApprovalGuard implements Guard<CardLifecycleState, CardLifecycleEvent> {
 
     @Override
     public boolean evaluate(StateContext<CardLifecycleState, CardLifecycleEvent> context) {
-        TransitionContext transitionContext = (TransitionContext)context.getMessageHeader("context");
+        TransitionContext transitionContext = transitionContext(context);
 
         if (transitionContext == null) {
-            log.warn("No transition context provided for approval");
-            return false;
+            return reject(context, "No se informó el contexto de la aprobación");
         }
-
-        // Validar que haya una razón
-        if (transitionContext.getReason() == null || transitionContext.getReason().isBlank()) {
-            log.warn("Approval requires a reason");
-            return false;
+        if (isBlank(transitionContext.getReason())) {
+            return reject(context, "La aprobación requiere una razón");
         }
-
-        // Validar que haya un aprobador
-        if (transitionContext.getPerformedBy() == null || transitionContext.getPerformedBy().isBlank()) {
-            log.warn("Approval requires approver information");
-            return false;
+        if (isBlank(transitionContext.getPerformedBy())) {
+            return reject(context, "La aprobación requiere el usuario que aprueba");
         }
 
         log.debug("Approval guard passed");

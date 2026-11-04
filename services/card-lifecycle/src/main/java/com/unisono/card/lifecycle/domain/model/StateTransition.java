@@ -50,21 +50,25 @@ public class StateTransition {
     }
 
     /**
-     * Factory method para crear una transición fallida
+     * Factory method para una transición fallida que conoce el estado destino buscado.
+     * {@code toState} es el destino que se intentó alcanzar (la columna es NOT NULL);
+     * {@code successful = false} indica que no se llegó a él.
      */
     public static StateTransition createFailed(
             CardId cardId,
             String fromState,
+            String intendedToState,
             String event,
+            String reason,
             String errorMessage,
             String performedBy
     ) {
         return StateTransition.builder()
                 .cardId(cardId)
                 .fromState(fromState)
-                .toState(null) // No hay estado destino en transiciones fallidas
+                .toState(intendedToState)
                 .event(event)
-                .reason(null)
+                .reason(reason)
                 .performedBy(performedBy)
                 .transitionedAt(LocalDateTime.now())
                 .successful(false)
