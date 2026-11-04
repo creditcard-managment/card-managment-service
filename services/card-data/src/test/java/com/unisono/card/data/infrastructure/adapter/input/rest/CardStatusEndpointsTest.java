@@ -185,10 +185,46 @@ class CardStatusEndpointsTest {
                 .andExpect(status().isUnprocessableEntity());
     }
 
+    // ========== POST /cancel ==========
+
+    @Test
+    void shouldCancelApprovedCardStoringReasonAndDate() throws Exception {
+        approve();
+
+        postJson("/cancel", "{\"reason\":\"Cliente solicitó cancelación\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"));
+
+        Card card = storedCard();
+        assertThat(card.getStatus()).isEqualTo(CardStatus.CANCELLED);
+        assertThat(card.getCancelledReason()).isEqualTo("Cliente solicitó cancelación");
+        assertThat(card.getCancelledAt()).isNotNull();
+    }
+
+    @Test
+    void shouldReturn422WhenCancellingRequestedCard() throws Exception {
+        postJson("/cancel", "{\"reason\":\"x\"}").andExpect(status().isUnprocessableEntity());
+
+        assertThat(storedCard().getStatus()).isEqualTo(CardStatus.REQUESTED);
+    }
+
+    @Test
+    void shouldReturn400WhenCancelReasonIsMissing() throws Exception {
+        approve();
+
+        postJson("/cancel", "{}").andExpect(status().isBadRequest());
+    }
+
     // ========== Helpers ==========
 
     private void approve() throws Exception {
         putJson("/status", "{\"status\":\"APPROVED\"}").andExpect(status().isOk());
+    }
+
+    private ResultActions postJson(String path, String body) throws Exception {
+        return mockMvc.perform(post("/api/v1/cards/" + cardId + path)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
     }
 
     private ResultActions putJson(String path, String body) throws Exception {

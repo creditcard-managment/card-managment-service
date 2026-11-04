@@ -119,6 +119,24 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase,
     }
 
     /**
+     * Cancela la tarjeta registrando motivo y fecha (cancelled_reason, cancelled_at).
+     * BusinessRuleException si la transición a CANCELLED no está permitida.
+     */
+    public Card cancel(CardId cardId, String reason) {
+        log.info("Cancelando tarjeta: {} - Razón: {}", cardId, reason);
+
+        Card card = getCardOrThrow(cardId);
+
+        card.cancel(reason);
+
+        Card savedCard = cardRepository.save(card);
+
+        log.info("Tarjeta cancelada exitosamente: {}", cardId);
+
+        return savedCard;
+    }
+
+    /**
      * Actualiza la fecha de activación
      */
     public void updateActivatedAt(CardId cardId, LocalDateTime activatedAt) {
