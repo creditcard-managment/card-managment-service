@@ -8,6 +8,10 @@ import com.unisono.card.data.domain.port.input.ResetPINUseCase.ResetPINCommand;
 import com.unisono.card.data.domain.port.input.ValidatePINUseCase.ValidatePINCommand;
 import com.unisono.card.data.domain.port.output.CardRepository;
 import com.unisono.card.data.domain.port.output.EncryptionPort;
+import com.unisono.card.data.domain.port.output.EventOutboxPort;
+import com.unisono.card.events.config.KafkaTopics;
+import com.unisono.card.events.domain.CardBlockedEvent;
+import org.mockito.ArgumentCaptor;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.valueobject.CardStatus;
 import com.unisono.card.shared.domain.valueobject.ClientId;
@@ -44,12 +48,15 @@ class PINManagementServiceTest {
     @Mock
     private EncryptionPort encryptionPort;
 
+    @Mock
+    private EventOutboxPort eventOutbox;
+
     private PINManagementService service;
     private Card card;
 
     @BeforeEach
     void setUp() {
-        service = new PINManagementService(cardRepository, encryptionPort);
+        service = new PINManagementService(cardRepository, encryptionPort, new CardEventEmitter(eventOutbox));
         card = activeCardWithPin();
         lenient().when(cardRepository.findById(card.getId())).thenReturn(Optional.of(card));
         lenient().when(cardRepository.save(any(Card.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -65,6 +72,21 @@ class PINManagementServiceTest {
 
         assertThat(card.getStatus()).isEqualTo(CardStatus.BLOCKED);
         verify(cardRepository, times(Card.MAX_PIN_ATTEMPTS)).save(card);
+    }
+
+    @Test
+    void shouldPublishBlockedEventOnlyWhenTheCardGetsBlocked() {
+        service.execute(new ValidatePINCommand(card.getId(), WRONG_PIN));
+        service.execute(new ValidatePINCommand(card.getId(), WRONG_PIN));
+        verify(eventOutbox, never()).enqueue(any(), any(), any());
+
+        service.execute(new ValidatePINCommand(card.getId(), WRONG_PIN));
+
+        ArgumentCaptor<CardBlockedEvent> event = ArgumentCaptor.forClass(CardBlockedEvent.class);
+        verify(eventOutbox).enqueue(eq(KafkaTopics.CARD_BLOCKED), eq(card.getId().getValue()), event.capture());
+        assertThat(event.getValue().getBlockType()).isEqualTo("NORMAL");
+        assertThat(event.getValue().getReason()).contains("intentos fallidos");
+        assertThat(event.getValue().getBlockedBy()).isEqualTo("system");
     }
 
     @Test

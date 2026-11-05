@@ -50,7 +50,8 @@ public class IssueCardService implements IssueCardUseCase {
                             command.pin(),
                             command.expirationDate()
                     );
-                    cardDataClient.updateStatus(command.cardId(), CardLifecycleState.ISSUED.name());
+                    cardDataClient.updateStatus(command.cardId(), CardLifecycleState.ISSUED.name(),
+                            command.reason(), command.issuedBy());
                 }
         );
 

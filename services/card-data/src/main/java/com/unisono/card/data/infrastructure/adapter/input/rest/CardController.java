@@ -172,7 +172,8 @@ public class CardController {
         updateCardStatusUseCase.execute(new UpdateCardStatusUseCase.UpdateStatusCommand(
                 CardId.of(cardId),
                 request.getStatus(),
-                request.getReason()
+                request.getReason(),
+                request.getPerformedBy()
         ));
 
         return ResponseEntity.ok().build();
@@ -198,7 +199,7 @@ public class CardController {
     ) {
         log.info("Cancelando tarjeta: {}", cardId);
 
-        Card card = cardManagementService.cancel(CardId.of(cardId), request.getReason());
+        Card card = cardManagementService.cancel(CardId.of(cardId), request.getReason(), request.getPerformedBy());
 
         return ResponseEntity.ok(mapper.toResponse(card));
     }

@@ -23,6 +23,7 @@ public interface UpdateCardStatusUseCase {
     record UpdateStatusCommand(
             CardId cardId,
             CardStatus newStatus,
-            String reason
+            String reason,
+            String performedBy
     ) {}
 }

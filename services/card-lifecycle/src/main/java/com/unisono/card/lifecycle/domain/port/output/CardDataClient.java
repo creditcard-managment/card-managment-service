@@ -15,16 +15,17 @@ public interface CardDataClient {
 
     CardStatus getStatus(CardId cardId);
 
-    void updateStatus(CardId cardId, String status);
+    /** card-data publica el evento del cambio con {@code reason} y {@code performedBy}. */
+    void updateStatus(CardId cardId, String status, String reason, String performedBy);
 
     /** Bloqueo temporal (POST /block): card-data registra block_reason y blocked_at. */
-    void block(CardId cardId, String reason);
+    void block(CardId cardId, String reason, String performedBy);
 
     /** Bloqueo por fraude (POST /block-fraud). */
-    void blockForFraud(CardId cardId, String reason);
+    void blockForFraud(CardId cardId, String reason, String performedBy);
 
     /** Cancelación (POST /cancel): card-data registra cancelled_reason y cancelled_at. */
-    void cancel(CardId cardId, String reason);
+    void cancel(CardId cardId, String reason, String performedBy);
 
     void updateActivatedAt(CardId cardId, LocalDateTime activatedAt);
 

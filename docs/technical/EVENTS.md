@@ -7,15 +7,15 @@
 | Artefacto Maven | `com.unisono.card:card-events` (`1.0.0-SNAPSHOT`) |
 | Tipo | Librería `jar` (sin Spring Boot, sin contenedor propio) |
 | Dependencias | `jackson-databind`, `jackson-datatype-jsr310`, `lombok` (optional) |
-| Paquetes | `com.unisono.card.events.domain` (eventos), `com.unisono.card.events.config` (`KafkaTopics`) |
-| Usada por | `card-data` (productor), `card-lifecycle` (consumidor), `payment-processing` (productor, solo `DomainEvent`) |
+| Paquetes | `com.unisono.card.events.domain` (eventos), `com.unisono.card.events.config` (`KafkaTopics`, `EventSerializationConfig`) |
+| Usada por | `card-data` (productor), `card-lifecycle` (consumidor de `card.created` y productor de la DLQ), `payment-processing` (productor, solo `DomainEvent`) |
 | Broker | Kafka `confluentinc/cp-kafka:7.6.0` + Zookeeper (ver `deploy/docker/docker-compose.yml`) |
 
 ---
 
 ## 1. Propósito
 
-`card-events` es un **kernel compartido de contratos**: los productores y consumidores dependen de las mismas clases Java para serializar y deserializar eventos, y de las mismas constantes para los nombres de topics. No contiene lógica de Kafka: cada servicio configura su propio productor o consumidor.
+`card-events` es un **kernel compartido de contratos**: los productores y consumidores dependen de las mismas clases Java para serializar y deserializar eventos, de las mismas constantes para los nombres de topics y del mismo `ObjectMapper` (`EventSerializationConfig.objectMapper()`: soporte de `java.time` y fechas ISO). No contiene lógica de Kafka: cada servicio configura su propio productor o consumidor.
 
 ```mermaid
 flowchart LR
@@ -28,8 +28,9 @@ flowchart LR
     CL[card-lifecycle] -- usa --> lib
     PP[payment-processing] -- usa DomainEvent --> lib
 
-    CD -->|card.created| K[(Kafka)]
+    CD -->|card.*| K[(Kafka)]
     K -->|card.created| CL
+    CL -->|dlq.card-events| K
     PP -->|payment.* | K
 ```
 
@@ -61,22 +62,22 @@ Estado según el código actual de los servicios:
 | Constante | Topic | Clase de evento | Productor | Consumidor | Estado |
 |---|---|---|---|---|---|
 | `CARD_CREATED` | `card.created` | `CardCreatedEvent` | card-data | card-lifecycle | ✅ En uso |
-| `CARD_APPROVED` | `card.approved` | `CardApprovedEvent` | — | — | Contrato definido, sin uso |
-| `CARD_REJECTED` | `card.rejected` | `CardRejectedEvent` (vacía) | — | — | Solo topic |
-| `CARD_ISSUED` | `card.issued` | `CardIssuedEvent` | — | — | Contrato definido, sin uso |
-| `CARD_ACTIVATED` | `card.activated` | `CardActivatedEvent` | — | — | Contrato definido, sin uso |
-| `CARD_BLOCKED` | `card.blocked` | `CardBlockedEvent` | — | — | Contrato definido, sin uso |
-| `CARD_UNBLOCKED` | `card.unblocked` | `CardUnblockedEvent` (vacía) | — | — | Solo topic |
-| `CARD_CANCELLED` | `card.cancelled` | `CardCancelledEvent` (vacía) | — | — | Solo topic |
-| `CREDIT_LIMIT_ASSIGNED` | `credit-limit.assigned` | `CreditLimitAssignedEvent` (vacía) | — | — | Solo topic |
-| `CREDIT_LIMIT_UPDATED` | `credit-limit.updated` | `CreditLimitUpdatedEvent` (vacía) | — | — | Solo topic |
-| `CREDIT_LIMIT_CONSUMED` | `credit-limit.consumed` | `CreditLimitConsumedEvent` (vacía) | — | — | Solo topic |
+| `CARD_APPROVED` | `card.approved` | `CardApprovedEvent` | card-data | — | ✅ Se publica |
+| `CARD_REJECTED` | `card.rejected` | `CardRejectedEvent` | card-data | — | ✅ Se publica |
+| `CARD_ISSUED` | `card.issued` | `CardIssuedEvent` | card-data | — | ✅ Se publica |
+| `CARD_ACTIVATED` | `card.activated` | `CardActivatedEvent` | card-data | — | ✅ Se publica |
+| `CARD_BLOCKED` | `card.blocked` | `CardBlockedEvent` | card-data | — | ✅ Se publica |
+| `CARD_UNBLOCKED` | `card.unblocked` | `CardUnblockedEvent` | card-data | — | ✅ Se publica |
+| `CARD_CANCELLED` | `card.cancelled` | `CardCancelledEvent` | card-data | — | ✅ Se publica |
+| `CREDIT_LIMIT_ASSIGNED` | `credit-limit.assigned` | `CreditLimitAssignedEvent` | — | — | Contrato definido, sin uso |
+| `CREDIT_LIMIT_UPDATED` | `credit-limit.updated` | `CreditLimitUpdatedEvent` | — | — | Contrato definido, sin uso |
+| `CREDIT_LIMIT_CONSUMED` | `credit-limit.consumed` | `CreditLimitConsumedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_RELEASED` | `credit-limit.released` | — | — | — | Solo topic |
 | `TRANSACTION_AUTHORIZED` | `transaction.authorized` | — | — | — | Reservado (“futuro”) |
 | `TRANSACTION_DECLINED` | `transaction.declined` | — | — | — | Reservado |
 | `TRANSACTION_REVERSED` | `transaction.reversed` | — | — | — | Reservado |
-| `DLQ_CARD_EVENTS` | `dlq.card-events` | — | — | — | Reservado, sin manejo de DLQ |
-| `DLQ_LIMIT_EVENTS` | `dlq.limit-events` | — | — | — | Reservado |
+| `DLQ_CARD_EVENTS` | `dlq.card-events` | Mensaje original, sin modificar | card-lifecycle | — | ✅ En uso, ver §5.3 |
+| `DLQ_LIMIT_EVENTS` | `dlq.limit-events` | — | — | — | Reservado: nadie consume eventos de límites |
 
 **Convención de nombres:** `<dominio>.<hecho-en-pasado>` en minúsculas, separado por punto (`card.created`, `credit-limit.assigned`). `payment-processing` usa su propia convención de tres niveles (`payment.processing.authorized`), ver §6.
 
@@ -84,7 +85,9 @@ Estado según el código actual de los servicios:
 
 ## 4. Eventos de tarjeta
 
-Todos los ejemplos incluyen los campos heredados de `DomainEvent`.
+Todos los ejemplos incluyen los campos heredados de `DomainEvent`. Los produce `card-data` por el outbox, con key `cardId`; cuándo se publica cada uno está en §5.1.
+
+En todos los eventos de cambio de estado, el autor (`approvedBy`, `blockedBy`, …) es el `performedBy` que recibe `card-data`, o `"system"` si no se informó. `reason` puede ser `null` si el cambio no llegó con motivo.
 
 ### 4.1 `CardCreatedEvent` — `card.created` ✅
 
@@ -113,7 +116,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 }
 ```
 
-### 4.2 `CardApprovedEvent` — `card.approved` (sin uso)
+### 4.2 `CardApprovedEvent` — `card.approved`
 
 | Campo | Tipo |
 |---|---|
@@ -121,7 +124,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | `reason` | `String` |
 | `approvedBy` | `String` |
 
-### 4.3 `CardIssuedEvent` — `card.issued` (sin uso)
+### 4.3 `CardIssuedEvent` — `card.issued`
 
 | Campo | Tipo | Nota |
 |---|---|---|
@@ -132,16 +135,16 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | `reason` | `String` | |
 | `issuedBy` | `String` | |
 
-### 4.4 `CardActivatedEvent` — `card.activated` (sin uso)
+### 4.4 `CardActivatedEvent` — `card.activated`
 
-| Campo | Tipo |
-|---|---|
-| `cardId` | `String` |
-| `activatedAt` | `LocalDateTime` (`yyyy-MM-dd'T'HH:mm:ss`) |
-| `reason` | `String` |
-| `activatedBy` | `String` |
+| Campo | Tipo | Nota |
+|---|---|---|
+| `cardId` | `String` | |
+| `activatedAt` | `LocalDateTime` (`yyyy-MM-dd'T'HH:mm:ss`) | Hora del cambio de estado en card-data. `cards.activated_at` lo informa card-lifecycle en otra llamada, así que puede diferir por milisegundos |
+| `reason` | `String` | |
+| `activatedBy` | `String` | |
 
-### 4.5 `CardBlockedEvent` — `card.blocked` (sin uso)
+### 4.5 `CardBlockedEvent` — `card.blocked`
 
 | Campo | Tipo | Nota |
 |---|---|---|
@@ -151,13 +154,47 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | `reason` | `String` | |
 | `blockedBy` | `String` | |
 
-### 4.6 Clases vacías
+### 4.6 `CardRejectedEvent` — `card.rejected`
 
-`CardRejectedEvent`, `CardUnblockedEvent`, `CardCancelledEvent`, `CreditLimitAssignedEvent`, `CreditLimitUpdatedEvent`, `CreditLimitConsumedEvent` y `config/EventSerializationConfig` son **archivos de 0 bytes**: existen como marcadores, pero no definen ninguna clase.
+| Campo | Tipo |
+|---|---|
+| `cardId` | `String` |
+| `reason` | `String` |
+| `rejectedBy` | `String` |
+
+### 4.7 `CardUnblockedEvent` — `card.unblocked`
+
+| Campo | Tipo |
+|---|---|
+| `cardId` | `String` |
+| `unblockedAt` | `LocalDateTime` |
+| `reason` | `String` |
+| `unblockedBy` | `String` |
+
+### 4.8 `CardCancelledEvent` — `card.cancelled`
+
+| Campo | Tipo |
+|---|---|
+| `cardId` | `String` |
+| `cancelledAt` | `LocalDateTime` |
+| `reason` | `String` |
+| `cancelledBy` | `String` |
+
+### 4.9 Eventos de límite de crédito (sin uso)
+
+Contratos definidos; `card-limits` todavía no los publica ni depende de esta librería ([LIMITS.md §9](LIMITS.md)). Los montos son `BigDecimal`.
+
+| Evento | Topic | Campos |
+|---|---|---|
+| `CreditLimitAssignedEvent` | `credit-limit.assigned` | `cardId`, `purchaseLimitAmount`, `cashAdvanceLimitAmount`, `currency`, `assignedBy` |
+| `CreditLimitUpdatedEvent` | `credit-limit.updated` | `cardId`, `previousPurchaseLimitAmount`, `newPurchaseLimitAmount`, `currency`, `reason`, `updatedBy` |
+| `CreditLimitConsumedEvent` | `credit-limit.consumed` | `cardId`, `transactionId`, `amount`, `availableAmount`, `currency` |
 
 ---
 
-## 5. Flujo implementado: `card.created`
+## 5. Flujos implementados
+
+`card.created` es el único evento con consumidor. El resto se publica con el mismo mecanismo (§5.1).
 
 ```mermaid
 sequenceDiagram
@@ -186,7 +223,23 @@ sequenceDiagram
 2. **Key del mensaje = `cardId`.** Todos los eventos de una misma tarjeta caen en la misma partición y conservan el orden.
 3. **Consumo.** `card-lifecycle` registra la transición inicial en su historial. Ver [LIFECYCLE.md §5.1](LIFECYCLE.md).
 
-### 5.1 Configuración del productor (card-data)
+### 5.1 Eventos de cambio de estado
+
+`card-data` encola el evento en la misma transacción que guarda el cambio (`CardEventEmitter`). Así se publican todos los cambios, también los que no pasan por card-lifecycle, como el bloqueo automático por PIN; y si la operación falla o se rechaza, no se publica nada. Comparten orden por tarjeta porque la key es el `cardId`, y la garantía *at-least-once* del outbox: los consumidores deben deduplicar por `eventId`.
+
+| Operación en card-data | Evento |
+|---|---|
+| `PUT /status` → `APPROVED` / `REJECTED` / `ISSUED` | `card.approved` / `card.rejected` / `card.issued` |
+| `PUT /status` → `ACTIVE`, desde `ISSUED` | `card.activated` |
+| `PUT /status` → `ACTIVE`, desde un estado bloqueado | `card.unblocked` |
+| `PUT /status` → `BLOCKED` / `BLOCKED_FRAUD` | `card.blocked` (`NORMAL` / `FRAUD`) |
+| `POST /block`, `POST /block-fraud` | `card.blocked` (`NORMAL` / `FRAUD`) |
+| Tercer PIN incorrecto (`validate-pin`, `reset-pin`) | `card.blocked` (`NORMAL`), autor `system` |
+| `POST /unblock` | `card.unblocked` |
+| `POST /cancel`, `PUT /status` → `CANCELLED` | `card.cancelled` |
+| `PUT /status` → `EXPIRED` | Ninguno: no hay contrato ni topic para el vencimiento |
+
+### 5.2 Configuración del productor (card-data)
 
 | Parámetro | Valor |
 |---|---|
@@ -200,7 +253,7 @@ sequenceDiagram
 | Timeouts | `request.timeout.ms=5000`, `delivery.timeout.ms=10000`, `max.block.ms=5000` (acotados por debajo de la espera del relay, para que un envío fallido no se entregue más tarde y se duplique) |
 | Envío | `OutboxRelay`: síncrono por evento (`send(...).get(send-timeout-ms)`), en orden de inserción |
 
-### 5.2 Configuración del consumidor (card-lifecycle)
+### 5.3 Configuración del consumidor (card-lifecycle)
 
 | Parámetro | Valor |
 |---|---|
@@ -211,9 +264,39 @@ sequenceDiagram
 | Ack mode | `MANUAL` (`acknowledgment.acknowledge()` tras procesar) |
 | Concurrencia | 1 |
 | `max.poll.records` | 100 |
-| Error handler | `DefaultErrorHandler` (no actúa: el listener captura las excepciones, ver §8) |
+| Error handler | `DefaultErrorHandler` con espera exponencial y `DeadLetterPublishingRecoverer` |
+| Reintentos | `card-lifecycle.kafka.retry.max-retries` (4) y `initial-interval-ms` (1000): 1 s, 2 s, 4 s y 8 s |
+| DLQ | `dlq.card-events`, con productor propio (`acks=all`, idempotente) |
 
 > Las propiedades `spring.kafka.consumer.value-deserializer`, `spring.json.trusted.packages` y `spring.json.value.default.type` del `application.yml` de `card-lifecycle` **no se aplican**, porque `KafkaConsumerConfig` define su propio `ConsumerFactory`.
+
+**Cuando un mensaje falla:**
+
+```mermaid
+flowchart LR
+    M[Mensaje] --> L[CardEventConsumer]
+    L -->|OK| A[ack]
+    L -->|JSON ilegible| D[(dlq.card-events)]
+    L -->|Otro error| R{¿Quedan reintentos?}
+    R -->|Sí, con espera| L
+    R -->|No| D
+    D --> C[Se confirma el offset<br/>y sigue con el próximo]
+```
+
+- La partición queda detenida mientras se reintenta, para conservar el orden por tarjeta. Agotados los reintentos, el resto de los mensajes se procesa con normalidad.
+- Si la publicación en la DLQ falla, el mensaje no se confirma y se vuelve a procesar: no se pierde.
+- El mensaje llega a la DLQ con su key y su valor originales. Los headers `kafka_dlt-*` indican el topic, la partición y el offset de origen, y la excepción.
+- Si un corte de la base dura más que los reintentos (15 s en total), los mensajes afectados también van a la DLQ y hay que reprocesarlos.
+
+**Inspeccionar la DLQ:**
+
+```bash
+docker exec -it card-management-kafka kafka-console-consumer \
+  --bootstrap-server kafka:9092 --topic dlq.card-events --from-beginning \
+  --property print.key=true --property print.headers=true
+```
+
+**Reprocesar:** todavía no hay herramienta. Una vez corregida la causa, hay que volver a publicar el valor en `card.created` con la misma key; el consumidor es idempotente. La DLQ tiene la retención del broker (7 días, §7).
 
 ---
 
@@ -257,7 +340,7 @@ Definida en `deploy/docker/docker-compose.yml`:
 | Retención | 168 h (7 días), segmentos de 1 GiB |
 | Replicación interna | `offsets.topic.replication.factor=1` |
 
-Los topics de tarjeta no se declaran en ningún lado: los **crea el broker automáticamente** con la configuración por defecto la primera vez que alguien publica o se suscribe.
+Los topics de tarjeta y las DLQ no se declaran en ningún lado: los **crea el broker automáticamente** con la configuración por defecto la primera vez que alguien publica o se suscribe.
 
 Para inspeccionar mensajes desde el host:
 
@@ -274,10 +357,10 @@ docker exec -it card-management-kafka kafka-console-consumer \
 |---|---|
 | Atomicidad DB ↔ Kafka | En card-data, garantizada con transactional outbox: el evento se confirma junto con la tarjeta y el relay lo publica hasta lograrlo. payment-processing sigue publicando dentro de la transacción, sin outbox. |
 | Entrega al broker | *At-least-once*: `acks=all` + idempotencia del productor + reintentos del relay. Un evento puede llegar dos veces con el mismo `eventId`: si la instancia cae entre el envío y el commit, o si un envío ya estaba en vuelo cuando el productor lo dio por vencido y el broker lo escribe igual (ocurre con cortes del broker). |
-| Orden | Por tarjeta en `card.created` (key `cardId`). Sin orden por transacción en `payment.*` (key `eventId`). |
-| Procesamiento en el consumidor | Pensado como *at-least-once* (ack manual), pero ver más abajo. |
+| Orden | Por tarjeta dentro de cada topic `card.*` (key `cardId`). No hay orden entre topics distintos. Sin orden por transacción en `payment.*` (key `eventId`). |
+| Procesamiento en el consumidor | *At-least-once*: ack manual después de procesar. |
 | Idempotencia del consumidor | card-lifecycle descarta duplicados de `card.created`: cada tarjeta tiene una sola transición `CREATE` (verificación previa + índice único `uq_state_transitions_create`). |
-| Errores en el consumidor | Se loguean y no se hace ack. Como la excepción no se relanza, no hay reintento inmediato ni DLQ. Si después se procesa bien un mensaje posterior de la misma partición, su ack confirma también el offset del fallido y este se pierde. |
+| Errores en el consumidor | Reintentos con espera exponencial y, si no alcanza, DLQ (§5.3). Un JSON ilegible va a la DLQ sin reintentos. |
 | Versionado de esquema | No hay campo de versión. `eventType` es el nombre de la clase Java, así que renombrar una clase rompe a los consumidores. |
 | Zona horaria | `occurredOn` y demás fechas son `LocalDateTime` sin offset: dependen de la zona del servidor productor. |
 
@@ -289,20 +372,19 @@ docker exec -it card-management-kafka kafka-console-consumer \
 2. Agregar dos constructores: uno `@JsonCreator` con `@JsonProperty` para todos los campos, incluidos `eventId` y `occurredOn` (llama a `super(eventId, occurredOn)`), y otro de negocio que llame a `super()`.
 3. Agregar el nombre del topic a `KafkaTopics` siguiendo la convención `<dominio>.<hecho>`.
 4. En el productor, encolarlo con `EventOutboxPort.enqueue(topic, aggregateId, event)` dentro de la transacción del caso de uso (en card-data; los demás servicios todavía no tienen outbox). El id del aggregate es la key del mensaje y preserva el orden.
-5. En el consumidor, hacer el ack solo tras procesar con éxito y manejar duplicados con `eventId`.
-6. Documentar el evento en este archivo (§3 y §4).
+5. En el consumidor, hacer el ack solo tras procesar con éxito, propagar las excepciones para que actúe el error handler y manejar duplicados con `eventId`.
+6. Agregar el evento a `EventContractTest` y documentarlo en este archivo (§3 y §4).
 
 ---
 
 ## 10. Limitaciones conocidas y deuda técnica
 
-1. **Solo `card.created` está implementado de punta a punta.** Aprobar, emitir, activar, bloquear y cancelar no publican eventos, aunque los contratos (`CardApprovedEvent`, `CardIssuedEvent`, `CardActivatedEvent`, `CardBlockedEvent`) y los topics ya existen. El resto del sistema no se entera de los cambios de estado.
-2. **Archivos vacíos en la librería:** seis clases de evento y `EventSerializationConfig` tienen 0 bytes.
-3. **Sin DLQ en los consumidores:** los topics `dlq.*` están reservados pero no hay `DeadLetterPublishingRecoverer` ni ningún otro mecanismo que los use. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
-4. **Consumidor sin reintentos reales** (ver §8): un mensaje que falla puede perderse si después se confirma uno posterior.
+1. **Eventos de tarjeta sin consumidores.** `card.created` es el único que se consume; los demás se publican, pero todavía nadie los lee. Tampoco se crea historial en `state_transitions` para los cambios que no pasan por card-lifecycle, como el bloqueo automático por PIN.
+2. **Sin evento de vencimiento.** Pasar a `EXPIRED` no publica nada: no hay `card.expired` en el catálogo.
+3. **DLQ sin reproceso automático** (ver §5.3): reinyectar mensajes es manual y un corte largo de la base puede llenarla. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
+4. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
 5. **Eventos de pago sin consumidores**, con key `eventId` (el comentario del código dice “to ensure ordering”, pero una key única por evento no ordena nada), y `RefundProcessed` y `FraudDetected` nunca se emiten.
 6. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
 7. **Replication factor 2 con un solo broker:** `KafkaPaymentConfig` declara los topics de pago con `replicas=2`, que el broker único del compose no puede satisfacer. La creación por `KafkaAdmin` falla; los topics terminan creándose por auto-creación con la configuración por defecto.
 8. **Convenciones mezcladas:** `KafkaTopics.TRANSACTION_*` (`transaction.authorized`) no coincide con los topics que realmente usa `payment-processing` (`payment.processing.authorized`); los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados.
-9. **Configuración ignorada en card-lifecycle:** las propiedades de deserialización del `application.yml` no se aplican (ver §5.2).
-10. **Sin tests de contrato** (serialización y deserialización ida y vuelta) en la librería.
+9. **Configuración ignorada en card-lifecycle:** las propiedades de deserialización del `application.yml` no se aplican (ver §5.3).

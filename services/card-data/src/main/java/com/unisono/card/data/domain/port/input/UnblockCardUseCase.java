@@ -11,8 +11,17 @@ public interface UnblockCardUseCase {
     /**
      * Desbloquea una tarjeta previamente bloqueada
      *
-     * @param cardId identificador de la tarjeta
+     * @param command datos para desbloquear
      * @return la tarjeta desbloqueada
      */
-    Card execute(CardId cardId);
+    Card execute(UnblockCardCommand command);
+
+    /**
+     * Command para desbloquear tarjeta
+     */
+    record UnblockCardCommand(
+            CardId cardId,
+            String reason,
+            String performedBy
+    ) {}
 }

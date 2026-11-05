@@ -1,5 +1,6 @@
 package com.unisono.card.lifecycle.infrastructure.adapter.input.event;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.unisono.card.events.config.KafkaTopics;
 import com.unisono.card.events.domain.CardCreatedEvent;
@@ -21,6 +22,9 @@ import org.springframework.stereotype.Component;
  * Idempotente: card-data publica con un outbox at-least-once, así que el mismo
  * card.created puede llegar más de una vez. Cada tarjeta tiene una sola transición
  * CREATE; si ya existe, el mensaje se confirma sin registrarla de nuevo.
+ *
+ * Las excepciones se propagan al DefaultErrorHandler (KafkaConsumerConfig), que reintenta
+ * y, si no se puede procesar, envía el mensaje a la DLQ.
  */
 @Slf4j
 @Component
@@ -46,40 +50,32 @@ public class CardEventConsumer {
             @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
             @Header(KafkaHeaders.OFFSET) long offset,
             Acknowledgment acknowledgment
-    ) {
+    ) throws JsonProcessingException {
         log.info("=================================================");
         log.info("📥 [CardEventConsumer] Received message from Kafka");
         log.info("📥 Partition: {}, Offset: {}", partition, offset);
         log.info("📥 Raw JSON: {}", eventJson);
         log.info("=================================================");
 
-        try {
-            // ✅ Deserializar manualmente usando ObjectMapper
-            CardCreatedEvent event = kafkaObjectMapper.readValue(eventJson, CardCreatedEvent.class);
+        // ✅ Deserializar manualmente usando ObjectMapper
+        CardCreatedEvent event = kafkaObjectMapper.readValue(eventJson, CardCreatedEvent.class);
 
-            log.info("📥 Deserialized CardCreatedEvent:");
-            log.info("📥 Event ID: {}", event.getEventId());
-            log.info("📥 Card ID: {}", event.getCardId());
-            log.info("📥 Client ID: {}", event.getClientId());
-            log.info("📥 Holder: {}", event.getHolderFullName());
-            log.info("📥 Type: {}", event.getCardType());
-            log.info("📥 Category: {}", event.getCardCategory());
+        log.info("📥 Deserialized CardCreatedEvent:");
+        log.info("📥 Event ID: {}", event.getEventId());
+        log.info("📥 Card ID: {}", event.getCardId());
+        log.info("📥 Client ID: {}", event.getClientId());
+        log.info("📥 Holder: {}", event.getHolderFullName());
+        log.info("📥 Type: {}", event.getCardType());
+        log.info("📥 Category: {}", event.getCardCategory());
 
-            // Registrar transición de estado CREATE (ignora duplicados)
-            registerCreateTransition(event);
+        // Registrar transición de estado CREATE (ignora duplicados)
+        registerCreateTransition(event);
 
-            // Confirmar procesamiento
-            acknowledgment.acknowledge();
+        // Confirmar procesamiento
+        acknowledgment.acknowledge();
 
-            log.info("✅ CardCreatedEvent processed successfully and acknowledged");
-            log.info("=================================================");
-
-        } catch (Exception e) {
-            log.error("=================================================");
-            log.error("❌ ERROR processing CardCreatedEvent: {}", e.getMessage(), e);
-            log.error("=================================================");
-            // NO hacer acknowledge - el mensaje se reprocesará
-        }
+        log.info("✅ CardCreatedEvent processed successfully and acknowledged");
+        log.info("=================================================");
     }
 
     /**
@@ -111,6 +107,10 @@ public class CardEventConsumer {
         try {
             saved = stateTransitionRepository.saveAndFlush(transition);
         } catch (DataIntegrityViolationException e) {
+            // Otra restricción (FK a cards, NOT NULL): no es un duplicado, el mensaje no se puede procesar
+            if (!stateTransitionRepository.existsByCardIdAndEvent(event.getCardId(), CREATE_EVENT)) {
+                throw e;
+            }
             // Otro consumo del mismo evento lo registró en paralelo (índice único uq_state_transitions_create)
             log.info("🔁 Duplicate CardCreatedEvent {} for card {}: CREATE registered concurrently, skipping",
                     event.getEventId(), event.getCardId());

@@ -52,7 +52,7 @@ class CardDataRestClientTest {
                 .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY).contentType(MediaType.APPLICATION_JSON)
                         .body("{\"status\":422,\"message\":\"Transición inválida: REQUESTED → ACTIVE\"}"));
 
-        assertThatThrownBy(() -> client.updateStatus(CARD_ID, "ACTIVE"))
+        assertThatThrownBy(() -> client.updateStatus(CARD_ID, "ACTIVE", "Activación", "cliente"))
                 .isInstanceOf(BusinessRuleException.class)
                 .hasMessage("Transición inválida: REQUESTED → ACTIVE");
     }
@@ -73,9 +73,23 @@ class CardDataRestClientTest {
     }
 
     @Test
+    void sendsReasonAndAuthorWhenUpdatingStatus() {
+        server.expect(requestTo(CARD_URL + "/status")).andExpect(method(HttpMethod.PUT))
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.reason").value("Cumple requisitos"))
+                .andExpect(jsonPath("$.performedBy").value("admin"))
+                .andRespond(withSuccess());
+
+        client.updateStatus(CARD_ID, "APPROVED", "Cumple requisitos", "admin");
+
+        server.verify();
+    }
+
+    @Test
     void blocksAndCancelsWithReason() {
         server.expect(requestTo(CARD_URL + "/block")).andExpect(method(HttpMethod.POST))
                 .andExpect(jsonPath("$.reason").value("Pérdida"))
+                .andExpect(jsonPath("$.performedBy").value("usuario"))
                 .andRespond(withSuccess("{\"status\":\"BLOCKED\"}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(CARD_URL + "/block-fraud")).andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess());
@@ -83,9 +97,9 @@ class CardDataRestClientTest {
                 .andExpect(jsonPath("$.reason").value("Baja"))
                 .andRespond(withSuccess());
 
-        client.block(CARD_ID, "Pérdida");
-        client.blockForFraud(CARD_ID, "Fraude");
-        client.cancel(CARD_ID, "Baja");
+        client.block(CARD_ID, "Pérdida", "usuario");
+        client.blockForFraud(CARD_ID, "Fraude", "antifraude");
+        client.cancel(CARD_ID, "Baja", "cliente");
 
         server.verify();
     }

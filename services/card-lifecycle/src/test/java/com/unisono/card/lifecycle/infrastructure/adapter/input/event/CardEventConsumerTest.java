@@ -1,5 +1,6 @@
 package com.unisono.card.lifecycle.infrastructure.adapter.input.event;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -16,6 +17,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.support.Acknowledgment;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -47,7 +49,7 @@ class CardEventConsumerTest {
     }
 
     @Test
-    void shouldRegisterCreateTransitionForNewCard() {
+    void shouldRegisterCreateTransitionForNewCard() throws Exception {
         when(repository.existsByCardIdAndEvent(CARD_ID, "CREATE")).thenReturn(false);
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -63,7 +65,7 @@ class CardEventConsumerTest {
     }
 
     @Test
-    void shouldSkipDuplicateEventAndAcknowledge() {
+    void shouldSkipDuplicateEventAndAcknowledge() throws Exception {
         when(repository.existsByCardIdAndEvent(CARD_ID, "CREATE")).thenReturn(true);
 
         consumer.consumeCardCreatedEvent(eventJson, 0, 1L, acknowledgment);
@@ -73,8 +75,8 @@ class CardEventConsumerTest {
     }
 
     @Test
-    void shouldTreatConcurrentDuplicateAsProcessed() {
-        when(repository.existsByCardIdAndEvent(CARD_ID, "CREATE")).thenReturn(false);
+    void shouldTreatConcurrentDuplicateAsProcessed() throws Exception {
+        when(repository.existsByCardIdAndEvent(CARD_ID, "CREATE")).thenReturn(false, true);
         when(repository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException("uq_state_transitions_create"));
 
         consumer.consumeCardCreatedEvent(eventJson, 0, 2L, acknowledgment);
@@ -83,8 +85,20 @@ class CardEventConsumerTest {
     }
 
     @Test
-    void shouldNotAcknowledgeUnreadableMessage() {
-        consumer.consumeCardCreatedEvent("{not json", 0, 3L, acknowledgment);
+    void shouldPropagateConstraintViolationThatIsNotADuplicate() {
+        when(repository.existsByCardIdAndEvent(CARD_ID, "CREATE")).thenReturn(false);
+        when(repository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException("fk_state_transitions_card"));
+
+        assertThatThrownBy(() -> consumer.consumeCardCreatedEvent(eventJson, 0, 2L, acknowledgment))
+                .isInstanceOf(DataIntegrityViolationException.class);
+
+        verify(acknowledgment, never()).acknowledge();
+    }
+
+    @Test
+    void shouldPropagateUnreadableMessageWithoutAcknowledging() {
+        assertThatThrownBy(() -> consumer.consumeCardCreatedEvent("{not json", 0, 3L, acknowledgment))
+                .isInstanceOf(JsonProcessingException.class);
 
         verify(repository, never()).saveAndFlush(any());
         verify(acknowledgment, never()).acknowledge();

@@ -23,7 +23,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -63,8 +62,8 @@ class BlockAndCancelServicesTest {
 
         StateTransition result = blockService.executeBlock(new BlockCardCommand(CARD_ID, "Pérdida", "usuario"));
 
-        verify(cardDataClient).block(CARD_ID, "Pérdida");
-        verify(cardDataClient, never()).updateStatus(any(), anyString());
+        verify(cardDataClient).block(CARD_ID, "Pérdida", "usuario");
+        verify(cardDataClient, never()).updateStatus(any(), any(), any(), any());
         assertThat(result.getFromState()).isEqualTo("ACTIVE");
         assertThat(result.getToState()).isEqualTo("BLOCKED");
         assertThat(result.getReason()).isEqualTo("Pérdida");
@@ -78,7 +77,7 @@ class BlockAndCancelServicesTest {
 
         StateTransition result = blockService.executeBlockFraud(new BlockCardCommand(CARD_ID, "Fraude", "antifraude"));
 
-        verify(cardDataClient).blockForFraud(CARD_ID, "Fraude");
+        verify(cardDataClient).blockForFraud(CARD_ID, "Fraude", "antifraude");
         assertThat(result.getToState()).isEqualTo("BLOCKED_FRAUD");
     }
 
@@ -91,7 +90,7 @@ class BlockAndCancelServicesTest {
         assertThatThrownBy(() -> blockService.executeBlock(new BlockCardCommand(CARD_ID, "x", "u")))
                 .isInstanceOf(InvalidStateTransitionException.class);
 
-        verify(cardDataClient, never()).block(any(), any());
+        verify(cardDataClient, never()).block(any(), any(), any());
         StateTransition failed = captured();
         assertThat(failed.isFailed()).isTrue();
         assertThat(failed.getFromState()).isEqualTo("REQUESTED");
@@ -106,7 +105,7 @@ class BlockAndCancelServicesTest {
 
         StateTransition result = cancelService.execute(new CancelCardCommand(CARD_ID, "Baja", "cliente"));
 
-        verify(cardDataClient).cancel(CARD_ID, "Baja");
+        verify(cardDataClient).cancel(CARD_ID, "Baja", "cliente");
         assertThat(result.getFromState()).isEqualTo("ISSUED");
         assertThat(result.getToState()).isEqualTo("CANCELLED");
     }
@@ -115,7 +114,7 @@ class BlockAndCancelServicesTest {
     void cancelRejectedByCardDataIsRecorded() {
         when(cardDataClient.getStatus(CARD_ID)).thenReturn(CardStatus.ACTIVE);
         when(stateMachine.fire(any(), any(), any(), any())).thenReturn(CardLifecycleState.CANCELLED);
-        doThrow(new BusinessRuleException("Transición de estado inválida")).when(cardDataClient).cancel(CARD_ID, "Baja");
+        doThrow(new BusinessRuleException("Transición de estado inválida")).when(cardDataClient).cancel(CARD_ID, "Baja", "cliente");
 
         assertThatThrownBy(() -> cancelService.execute(new CancelCardCommand(CARD_ID, "Baja", "cliente")))
                 .isInstanceOf(BusinessRuleException.class);
@@ -131,7 +130,7 @@ class BlockAndCancelServicesTest {
 
         rejectService.execute(new RejectCardCommand(CARD_ID, "No califica", "admin"));
 
-        verify(cardDataClient).updateStatus(CARD_ID, "REJECTED");
+        verify(cardDataClient).updateStatus(CARD_ID, "REJECTED", "No califica", "admin");
         assertThat(captured().getToState()).isEqualTo("REJECTED");
     }
 

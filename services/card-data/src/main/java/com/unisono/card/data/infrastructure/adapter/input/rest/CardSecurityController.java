@@ -1,6 +1,7 @@
 package com.unisono.card.data.infrastructure.adapter.input.rest;
 
 import com.unisono.card.data.application.dto.request.BlockCardRequest;
+import com.unisono.card.data.application.dto.request.UnblockCardRequest;
 import com.unisono.card.data.application.dto.response.CardResponse;
 import com.unisono.card.data.application.mapper.CardDtoMapper;
 import com.unisono.card.data.domain.model.Card;
@@ -52,7 +53,8 @@ public class CardSecurityController {
 
         BlockCardUseCase.BlockCardCommand command = new BlockCardUseCase.BlockCardCommand(
                 CardId.of(cardId),
-                request.getReason()
+                request.getReason(),
+                request.getPerformedBy()
         );
 
         Card card = blockCardUseCase.execute(command);
@@ -84,7 +86,8 @@ public class CardSecurityController {
 
         BlockCardUseCase.BlockCardCommand command = new BlockCardUseCase.BlockCardCommand(
                 CardId.of(cardId),
-                request.getReason()
+                request.getReason(),
+                request.getPerformedBy()
         );
 
         Card card = blockCardUseCase.executeForFraud(command);
@@ -108,11 +111,17 @@ public class CardSecurityController {
     })
     public ResponseEntity<CardResponse> unblockCard(
             @Parameter(description = "ID de la tarjeta")
-            @PathVariable String cardId
+            @PathVariable String cardId,
+
+            @Valid @RequestBody(required = false) UnblockCardRequest request
     ) {
         log.info("Unblocking card: {}", cardId);
 
-        Card card = unblockCardUseCase.execute(CardId.of(cardId));
+        Card card = unblockCardUseCase.execute(new UnblockCardUseCase.UnblockCardCommand(
+                CardId.of(cardId),
+                request != null ? request.getReason() : null,
+                request != null ? request.getPerformedBy() : null
+        ));
 
         CardResponse response = mapper.toResponse(card);
 

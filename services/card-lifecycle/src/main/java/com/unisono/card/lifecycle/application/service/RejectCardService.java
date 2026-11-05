@@ -30,7 +30,8 @@ public class RejectCardService implements RejectCardUseCase {
                 CardLifecycleEvent.REJECT,
                 CardLifecycleState.REJECTED,
                 TransitionContext.of(command.reason(), command.rejectedBy()),
-                () -> cardDataClient.updateStatus(command.cardId(), CardLifecycleState.REJECTED.name())
+                () -> cardDataClient.updateStatus(command.cardId(), CardLifecycleState.REJECTED.name(),
+                        command.reason(), command.rejectedBy())
         );
 
         log.info("Tarjeta rechazada: {}", command.cardId().getValue());

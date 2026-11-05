@@ -6,6 +6,7 @@ import com.unisono.card.data.domain.port.input.UnblockCardUseCase;
 import com.unisono.card.data.domain.port.output.CardRepository;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
+import com.unisono.card.shared.domain.valueobject.CardStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class CardSecurityService implements BlockCardUseCase, UnblockCardUseCase {
 
     private final CardRepository cardRepository;
+    private final CardEventEmitter eventEmitter;
 
     // ========================================
     // BlockCardUseCase
@@ -32,9 +34,12 @@ public class CardSecurityService implements BlockCardUseCase, UnblockCardUseCase
         log.info("Blocking card: {} - Reason: {}", command.cardId(), command.reason());
 
         Card card = getCardOrThrow(command.cardId());
+        CardStatus previousStatus = card.getStatus();
         card.block(command.reason());
 
         Card savedCard = cardRepository.save(card);
+
+        eventEmitter.statusChanged(savedCard, previousStatus, command.reason(), command.performedBy());
 
         log.info("Card blocked successfully: {}", command.cardId());
 
@@ -46,9 +51,12 @@ public class CardSecurityService implements BlockCardUseCase, UnblockCardUseCase
         log.warn("Blocking card for FRAUD: {} - Reason: {}", command.cardId(), command.reason());
 
         Card card = getCardOrThrow(command.cardId());
+        CardStatus previousStatus = card.getStatus();
         card.blockForFraud(command.reason());
 
         Card savedCard = cardRepository.save(card);
+
+        eventEmitter.statusChanged(savedCard, previousStatus, command.reason(), command.performedBy());
 
         log.warn("Card blocked for FRAUD: {}", command.cardId());
 
@@ -60,15 +68,18 @@ public class CardSecurityService implements BlockCardUseCase, UnblockCardUseCase
     // ========================================
 
     @Override
-    public Card execute(CardId cardId) {
-        log.info("Unblocking card: {}", cardId);
+    public Card execute(UnblockCardCommand command) {
+        log.info("Unblocking card: {}", command.cardId());
 
-        Card card = getCardOrThrow(cardId);
+        Card card = getCardOrThrow(command.cardId());
+        CardStatus previousStatus = card.getStatus();
         card.unblock();
 
         Card savedCard = cardRepository.save(card);
 
-        log.info("Card unblocked successfully: {}", cardId);
+        eventEmitter.statusChanged(savedCard, previousStatus, command.reason(), command.performedBy());
+
+        log.info("Card unblocked successfully: {}", command.cardId());
 
         return savedCard;
     }

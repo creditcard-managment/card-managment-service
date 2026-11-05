@@ -65,7 +65,7 @@ class ActivateCardServiceTest {
 
         StateTransition result = service.execute(command);
 
-        verify(cardDataClient).updateStatus(CARD_ID, "ACTIVE");
+        verify(cardDataClient).updateStatus(CARD_ID, "ACTIVE", "Activación vía app", "cliente@email.com");
         verify(cardDataClient).updateActivatedAt(eq(CARD_ID), any());
         assertThat(result.isSuccessful()).isTrue();
         assertThat(result.getFromState()).isEqualTo("ISSUED");
@@ -83,7 +83,7 @@ class ActivateCardServiceTest {
                 .isInstanceOf(BusinessRuleException.class)
                 .hasMessageContaining("PIN incorrecto");
 
-        verify(cardDataClient, never()).updateStatus(any(), anyString());
+        verify(cardDataClient, never()).updateStatus(any(), any(), any(), any());
         verify(cardDataClient, never()).updateActivatedAt(any(), any());
         StateTransition failed = capturedSave();
         assertThat(failed.isFailed()).isTrue();
@@ -102,7 +102,7 @@ class ActivateCardServiceTest {
                 .isInstanceOf(InvalidStateTransitionException.class);
 
         verify(cardDataClient, never()).validatePin(any(), any());
-        verify(cardDataClient, never()).updateStatus(any(), anyString());
+        verify(cardDataClient, never()).updateStatus(any(), any(), any(), any());
         assertThat(capturedSave().getErrorMessage()).isEqualTo("sin límite de crédito");
     }
 
@@ -111,7 +111,8 @@ class ActivateCardServiceTest {
         when(cardDataClient.getStatus(CARD_ID)).thenReturn(CardStatus.ISSUED);
         when(stateMachine.fire(any(), any(), any(), any())).thenReturn(CardLifecycleState.ACTIVE);
         when(cardDataClient.validatePin(CARD_ID, PIN_OK)).thenReturn(true);
-        doThrow(new BusinessRuleException("Transición no permitida")).when(cardDataClient).updateStatus(CARD_ID, "ACTIVE");
+        doThrow(new BusinessRuleException("Transición no permitida")).when(cardDataClient)
+                .updateStatus(CARD_ID, "ACTIVE", "Activación vía app", "cliente@email.com");
 
         assertThatThrownBy(() -> service.execute(command)).isInstanceOf(BusinessRuleException.class);
 
