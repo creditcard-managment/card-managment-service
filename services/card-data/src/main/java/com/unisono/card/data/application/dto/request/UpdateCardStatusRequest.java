@@ -26,4 +26,8 @@ public class UpdateCardStatusRequest {
     @Size(max = 500, message = "La razón no puede exceder 500 caracteres")
     @Schema(description = "Razón del cambio (opcional)", example = "Cliente cumple requisitos")
     private String reason;
+
+    @Size(max = 100, message = "El autor no puede exceder 100 caracteres")
+    @Schema(description = "Quién ejecuta el cambio; se publica en el evento", example = "admin@bank.com")
+    private String performedBy;
 }

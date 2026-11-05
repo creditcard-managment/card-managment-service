@@ -5,9 +5,6 @@ import com.unisono.card.data.domain.port.input.CreateCardUseCase;
 import com.unisono.card.data.domain.port.input.GetCardUseCase;
 import com.unisono.card.data.domain.port.input.UpdateCardStatusUseCase;
 import com.unisono.card.data.domain.port.output.CardRepository;
-import com.unisono.card.data.domain.port.output.EventOutboxPort;
-import com.unisono.card.events.config.KafkaTopics;
-import com.unisono.card.events.domain.CardCreatedEvent;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.*;
 import lombok.RequiredArgsConstructor;
@@ -30,7 +27,8 @@ import java.util.Optional;
 public class CardManagementService implements CreateCardUseCase, GetCardUseCase, UpdateCardStatusUseCase {
 
     private final CardRepository cardRepository;
-    private final EventOutboxPort eventOutbox;
+    private final CardEventEmitter eventEmitter;
+
     // ========================================
     // CreateCardUseCase
     // ========================================
@@ -51,14 +49,7 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase,
         Card savedCard = cardRepository.save(card);
 
         // Encolar el evento en la misma transacción (outbox); OutboxRelay lo publica en Kafka
-        eventOutbox.enqueue(KafkaTopics.CARD_CREATED, savedCard.getId().getValue(), new CardCreatedEvent(
-                savedCard.getId().getValue(),
-                savedCard.getClientId().getValue(),
-                savedCard.getHolder().getFullName(),
-                savedCard.getType().name(),
-                savedCard.getCategory().name(),
-                "system"
-        ));
+        eventEmitter.cardCreated(savedCard);
 
         log.info("Card created successfully with ID: {}", savedCard.getId());
 
@@ -107,11 +98,14 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase,
         log.info("Actualizando estado de tarjeta: {} -> {}", command.cardId(), command.newStatus());
 
         Card card = getCardOrThrow(command.cardId());
+        CardStatus previousStatus = card.getStatus();
 
         // Valida la transición en el aggregate (BusinessRuleException si no está permitida)
         card.updateStatus(command.newStatus());
 
         Card savedCard = cardRepository.save(card);
+
+        eventEmitter.statusChanged(savedCard, previousStatus, command.reason(), command.performedBy());
 
         log.info("Estado actualizado exitosamente");
 
@@ -122,14 +116,17 @@ public class CardManagementService implements CreateCardUseCase, GetCardUseCase,
      * Cancela la tarjeta registrando motivo y fecha (cancelled_reason, cancelled_at).
      * BusinessRuleException si la transición a CANCELLED no está permitida.
      */
-    public Card cancel(CardId cardId, String reason) {
+    public Card cancel(CardId cardId, String reason, String performedBy) {
         log.info("Cancelando tarjeta: {} - Razón: {}", cardId, reason);
 
         Card card = getCardOrThrow(cardId);
+        CardStatus previousStatus = card.getStatus();
 
         card.cancel(reason);
 
         Card savedCard = cardRepository.save(card);
+
+        eventEmitter.statusChanged(savedCard, previousStatus, reason, performedBy);
 
         log.info("Tarjeta cancelada exitosamente: {}", cardId);
 

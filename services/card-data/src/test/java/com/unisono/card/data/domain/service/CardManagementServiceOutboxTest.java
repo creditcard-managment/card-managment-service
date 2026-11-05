@@ -37,7 +37,7 @@ class CardManagementServiceOutboxTest {
     @Test
     void shouldEnqueueCardCreatedEventWhenCardIsCreated() {
         when(cardRepository.save(any(Card.class))).thenAnswer(inv -> inv.getArgument(0));
-        CardManagementService service = new CardManagementService(cardRepository, eventOutbox);
+        CardManagementService service = new CardManagementService(cardRepository, new CardEventEmitter(eventOutbox));
 
         Card card = service.execute(new CreateCardCommand(
                 ClientId.of("12345678"),

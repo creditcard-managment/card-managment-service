@@ -9,6 +9,7 @@ import com.unisono.card.data.domain.port.output.EncryptionPort;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
+import com.unisono.card.shared.domain.valueobject.CardStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,7 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
 
     private final CardRepository cardRepository;
     private final EncryptionPort encryptionPort;
+    private final CardEventEmitter eventEmitter;
 
     // ========================================
     // ValidatePINUseCase
@@ -115,8 +117,10 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
     // ========================================
 
     private boolean registerFailedAttempt(Card card) {
+        CardStatus previousStatus = card.getStatus();
         boolean blocked = card.registerFailedPinAttempt();
         if (blocked) {
+            eventEmitter.statusChanged(card, previousStatus, card.getBlockReason(), CardEventEmitter.SYSTEM_ACTOR);
             log.warn("Card {} blocked after {} failed PIN attempts", card.getId(), card.getPinFailedAttempts());
         } else {
             log.warn("Invalid PIN attempt for card: {} ({} remaining)", card.getId(), card.getRemainingPinAttempts());

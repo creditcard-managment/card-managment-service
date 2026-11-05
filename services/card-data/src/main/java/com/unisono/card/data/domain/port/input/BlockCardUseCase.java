@@ -29,6 +29,7 @@ public interface BlockCardUseCase {
      */
     record BlockCardCommand(
             CardId cardId,
-            String reason
+            String reason,
+            String performedBy
     ) {}
 }

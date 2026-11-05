@@ -6,7 +6,10 @@ import com.unisono.card.data.domain.model.CardCategory;
 import com.unisono.card.data.domain.model.CardHolder;
 import com.unisono.card.data.domain.model.CardType;
 import com.unisono.card.data.domain.port.output.CardRepository;
+import com.unisono.card.data.domain.service.CardEventEmitter;
 import com.unisono.card.data.domain.service.CardManagementService;
+import com.unisono.card.events.config.KafkaTopics;
+import com.unisono.card.events.domain.*;
 import com.unisono.card.data.domain.service.CardSecurityService;
 import com.unisono.card.data.infrastructure.config.KafkaProducerConfig;
 import com.unisono.card.shared.domain.valueobject.CardId;
@@ -22,6 +25,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,15 +48,21 @@ class CardStatusEndpointsTest {
             {"cardNumber":"4532015112830366","cvv":"123","pin":"4821","expirationMonth":12,"expirationYear":%d}
             """;
 
+    private record EnqueuedEvent(String topic, String key, DomainEvent event) {}
+
     private InMemoryCardRepository repository;
+    private List<EnqueuedEvent> outbox;
     private MockMvc mockMvc;
     private String cardId;
 
     @BeforeEach
     void setUp() {
         repository = new InMemoryCardRepository();
-        CardManagementService managementService = new CardManagementService(repository, (topic, aggregateId, event) -> { });
-        CardSecurityService securityService = new CardSecurityService(repository);
+        outbox = new ArrayList<>();
+        CardEventEmitter emitter = new CardEventEmitter(
+                (topic, aggregateId, event) -> outbox.add(new EnqueuedEvent(topic, aggregateId, event)));
+        CardManagementService managementService = new CardManagementService(repository, emitter);
+        CardSecurityService securityService = new CardSecurityService(repository, emitter);
         CardDtoMapper mapper = new CardDtoMapper();
 
         mockMvc = MockMvcBuilders
@@ -183,6 +193,111 @@ class CardStatusEndpointsTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"Pérdida\"}"))
                 .andExpect(status().isUnprocessableEntity());
+    }
+
+    // ========== Eventos ==========
+
+    @Test
+    void shouldEnqueueOneEventPerTransitionWithReasonAndAuthor() throws Exception {
+        putJson("/status", "{\"status\":\"APPROVED\",\"reason\":\"Cumple\",\"performedBy\":\"admin\"}")
+                .andExpect(status().isOk());
+        putJson("/card-data", VALID_CARD_DATA.formatted(LocalDate.now().getYear() + 2)).andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"ISSUED\",\"reason\":\"Emisión\",\"performedBy\":\"emisor\"}")
+                .andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"ACTIVE\",\"reason\":\"App\",\"performedBy\":\"cliente\"}")
+                .andExpect(status().isOk());
+        postJson("/block-fraud", "{\"reason\":\"Consumos raros\",\"performedBy\":\"antifraude\"}")
+                .andExpect(status().isOk());
+        postJson("/unblock", "{\"reason\":\"Falsa alarma\",\"performedBy\":\"antifraude\"}")
+                .andExpect(status().isOk());
+        postJson("/cancel", "{\"reason\":\"Baja\",\"performedBy\":\"cliente\"}")
+                .andExpect(status().isOk());
+
+        assertThat(outbox).extracting(EnqueuedEvent::topic).containsExactly(
+                KafkaTopics.CARD_APPROVED, KafkaTopics.CARD_ISSUED, KafkaTopics.CARD_ACTIVATED,
+                KafkaTopics.CARD_BLOCKED, KafkaTopics.CARD_UNBLOCKED, KafkaTopics.CARD_CANCELLED);
+        assertThat(outbox).extracting(EnqueuedEvent::key).containsOnly(cardId);
+
+        CardApprovedEvent approved = eventAt(0);
+        assertThat(approved.getReason()).isEqualTo("Cumple");
+        assertThat(approved.getApprovedBy()).isEqualTo("admin");
+
+        CardIssuedEvent issued = eventAt(1);
+        assertThat(issued.getLastFourDigits()).isEqualTo("0366");
+        assertThat(issued.getExpirationMonth()).isEqualTo(12);
+        assertThat(issued.getIssuedBy()).isEqualTo("emisor");
+
+        CardActivatedEvent activated = eventAt(2);
+        assertThat(activated.getActivatedAt()).isNotNull();
+        assertThat(activated.getActivatedBy()).isEqualTo("cliente");
+
+        CardBlockedEvent blocked = eventAt(3);
+        assertThat(blocked.getBlockType()).isEqualTo("FRAUD");
+        assertThat(blocked.getBlockedAt()).isNotNull();
+        assertThat(blocked.getBlockedBy()).isEqualTo("antifraude");
+
+        CardUnblockedEvent unblocked = eventAt(4);
+        assertThat(unblocked.getReason()).isEqualTo("Falsa alarma");
+
+        CardCancelledEvent cancelled = eventAt(5);
+        assertThat(cancelled.getCancelledAt()).isNotNull();
+        assertThat(cancelled.getCancelledBy()).isEqualTo("cliente");
+    }
+
+    @Test
+    void shouldEnqueueRejectedEvent() throws Exception {
+        putJson("/status", "{\"status\":\"REJECTED\",\"reason\":\"No califica\",\"performedBy\":\"admin\"}")
+                .andExpect(status().isOk());
+
+        assertThat(outbox).extracting(EnqueuedEvent::topic).containsExactly(KafkaTopics.CARD_REJECTED);
+        CardRejectedEvent rejected = eventAt(0);
+        assertThat(rejected.getRejectedBy()).isEqualTo("admin");
+    }
+
+    @Test
+    void shouldUseSystemAsAuthorWhenNoneIsInformed() throws Exception {
+        putJson("/status", "{\"status\":\"APPROVED\"}").andExpect(status().isOk());
+
+        CardApprovedEvent approved = eventAt(0);
+        assertThat(approved.getApprovedBy()).isEqualTo("system");
+    }
+
+    @Test
+    void shouldTreatActiveAfterBlockAsUnblockInStatusEndpoint() throws Exception {
+        putJson("/status", "{\"status\":\"APPROVED\"}").andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"ISSUED\"}").andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"ACTIVE\"}").andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"BLOCKED\"}").andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"ACTIVE\"}").andExpect(status().isOk());
+
+        assertThat(outbox).extracting(EnqueuedEvent::topic).endsWith(
+                KafkaTopics.CARD_ACTIVATED, KafkaTopics.CARD_BLOCKED, KafkaTopics.CARD_UNBLOCKED);
+    }
+
+    @Test
+    void shouldNotEnqueueEventWhenTransitionIsRejected() throws Exception {
+        putJson("/status", "{\"status\":\"ACTIVE\"}").andExpect(status().isUnprocessableEntity());
+        postJson("/cancel", "{\"reason\":\"x\"}").andExpect(status().isUnprocessableEntity());
+        postJson("/block", "{\"reason\":\"x\"}").andExpect(status().isUnprocessableEntity());
+
+        assertThat(outbox).isEmpty();
+    }
+
+    @Test
+    void shouldNeverPublishSensitiveData() throws Exception {
+        putJson("/status", "{\"status\":\"APPROVED\"}").andExpect(status().isOk());
+        putJson("/card-data", VALID_CARD_DATA.formatted(LocalDate.now().getYear() + 2)).andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"ISSUED\"}").andExpect(status().isOk());
+
+        String json = new KafkaProducerConfig().objectMapper().writeValueAsString(eventAt(1));
+
+        assertThat(json).doesNotContain("4532015112830366").doesNotContain("4821")
+                .doesNotContain("cvv").doesNotContain("pin");
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T extends DomainEvent> T eventAt(int index) {
+        return (T) outbox.get(index).event();
     }
 
     // ========== POST /cancel ==========
