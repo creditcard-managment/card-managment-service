@@ -9,7 +9,7 @@
 | Puerto | `8083` |
 | Base path REST | `/api/v1/card-lifecycle` |
 | Base de datos | PostgreSQL `card_management_db` — tabla propia `state_transitions`; lee `credit_limits`. No accede a `cards` (la modifica vía `card-data`) |
-| Mensajería | Kafka (consumidor) — topic `card.created`, grupo `card-lifecycle-consumer-group` |
+| Mensajería | Kafka: consume `card.created` (grupo `card-lifecycle-consumer-group`) y publica en `dlq.card-events` los mensajes que no puede procesar |
 | Integración síncrona | REST hacia `card-data` (`card-data.base-url`, por defecto `http://localhost:8081`): lectura de estado, cambios de estado, datos de emisión, validación de PIN, bloqueo y cancelación |
 | Dependencias internas | `card-shared` (Value Objects, `CardStatus`, excepciones), `card-events` (eventos y topics) |
 | Librerías destacadas | Spring State Machine (`spring-statemachine-core`, `-data-jpa`) |
@@ -90,6 +90,8 @@ Todos delegan en `LifecycleTransitionExecutor`, que aplica siempre la misma secu
 Si falla cualquier paso con una excepción de dominio, registra una transición fallida (`successful = false`, `to_state` = destino buscado, `error_message` = motivo) y relanza la excepción. Si la tarjeta no existe (404) no se registra nada, porque `state_transitions.card_id` tiene FK a `cards`. Los servicios **no son transaccionales**: cada guardado en `state_transitions` se confirma por separado, así que el registro del fallo no se revierte. Si el guardado del fallo también falla, se loguea y se propaga el error original.
 
 `CardLifecycleService` solo expone consultas del historial.
+
+Junto con cada cambio, card-lifecycle envía `reason` y `performedBy` a `card-data`, que publica el evento de integración (`card.approved`, `card.blocked`, …) en la misma transacción. card-lifecycle no publica eventos de tarjeta. Ver [EVENTS.md §5.1](EVENTS.md).
 
 `card-lifecycle` es la **única puerta de entrada** para cambiar el estado: los endpoints de `card-data` que usa son internos. Si alguien llama a `card-data` `/block` directamente, el cambio no queda en el historial (ver [DATA.md §4.2](DATA.md)).
 
@@ -325,7 +327,7 @@ sequenceDiagram
 - `enable.auto.commit=false`, `AckMode.MANUAL`, concurrencia 1, `auto-offset-reset=earliest`, `max.poll.records=100`.
 - **Idempotente:** card-data publica con un outbox *at-least-once*, así que el mismo evento puede llegar más de una vez. Si la tarjeta ya tiene su transición `CREATE`, el mensaje se confirma sin registrarla de nuevo. El índice único `uq_state_transitions_create` (V10) cubre además el caso de dos consumos en paralelo.
 - El `eventId` del mensaje se guarda en `metadata` (`{"eventId":"…"}`).
-- Si el procesamiento falla, la excepción se loguea y **no se hace ack** (ver §9 sobre el efecto real).
+- Si el procesamiento falla, la excepción llega al `DefaultErrorHandler`: reintenta 4 veces con espera exponencial (1 s, 2 s, 4 s, 8 s) y luego envía el mensaje a `dlq.card-events`. Un JSON ilegible va directo a la DLQ. Una violación de restricción que no sea el duplicado de `CREATE` (por ejemplo, FK a `cards`) se trata como error. Ver [EVENTS.md §5.3](EVENTS.md).
 
 ### 5.2 Aprobación → emisión → activación
 
@@ -444,6 +446,8 @@ Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, s
 | `spring.kafka.consumer.group-id` | `card-lifecycle-consumer-group` |
 | `spring.kafka.listener.ack-mode` | `manual` |
 | `card-data.base-url` | `http://localhost:8081` (default en `CardDataRestClient`) |
+| `card-lifecycle.kafka.retry.max-retries` | `4` (reintentos antes de enviar a la DLQ) |
+| `card-lifecycle.kafka.retry.initial-interval-ms` | `1000` (se duplica en cada reintento) |
 
 El perfil `card-lifecycle` (`application-card-lifecycle.yml`, activado por docker-compose) agrega logging a `logs/card-lifecycle.log`, Prometheus, SpringDoc y endpoints de actuator. Las propiedades `card-lifecycle.transitions.*` (timeout, reintentos) y `card-lifecycle.audit.*` (retención) están declaradas pero **ningún código las lee**.
 
@@ -473,6 +477,5 @@ Comportamientos actuales del código que conviene resolver:
 1. **Sin desbloqueo.** No hay endpoint ni implementación de `UnblockCardUseCase`, aunque está previsto en la state machine y en el dominio.
 2. **Ports sin implementar:** `UnblockCardUseCase` y `GetLifecycleHistoryUseCase` son interfaces sin implementación (el historial se consulta con `CardLifecycleService` directamente).
 3. **Consistencia entre servicios.** Emisión y activación hacen varias llamadas REST de escritura seguidas: si la segunda falla, `card-data` queda a medio actualizar y no hay compensación. Si falla el guardado de la transición después de las llamadas, el cambio en `card-data` ya está hecho y no queda historial. `RestTemplate` no tiene timeouts.
-4. **Manejo del consumidor Kafka.** Al fallar no hace ack, pero tampoco relanza la excepción, así que el `DefaultErrorHandler` no actúa. El mensaje solo se reprocesa si el consumidor se reinicia antes de confirmar un offset posterior; si después llega un mensaje correcto, su ack confirma también el offset del fallido y el fallido se pierde.
-5. **Código muerto:** `hashPin()` en el controller, `LifecycleDtoMapper.toIssueCardCommand` y su record interno, `application/dto/response/LifecycleHistoryResponse` (duplicado del DTO REST), `StateMachineActionConfig` (vacío) y las propiedades `card-lifecycle.*` del perfil.
-6. **Cobertura de tests parcial.** Hay tests del consumidor Kafka, de la state machine con sus guards (`SpringStateMachineAdapterTest`), del cliente REST (`CardDataRestClientTest`), de la activación (`ActivateCardServiceTest`) y de rechazo, bloqueo y cancelación (`BlockAndCancelServicesTest`); faltan los de aprobación, emisión y del controller.
+4. **Código muerto:** `hashPin()` en el controller, `LifecycleDtoMapper.toIssueCardCommand` y su record interno, `application/dto/response/LifecycleHistoryResponse` (duplicado del DTO REST), `StateMachineActionConfig` (vacío) y las propiedades `card-lifecycle.*` del perfil.
+5. **Cobertura de tests parcial.** Hay tests del consumidor Kafka (incluidos reintentos y DLQ contra un broker embebido), de la state machine con sus guards (`SpringStateMachineAdapterTest`), del cliente REST (`CardDataRestClientTest`), de la activación (`ActivateCardServiceTest`) y de rechazo, bloqueo y cancelación (`BlockAndCancelServicesTest`); faltan los de aprobación, emisión y del controller.

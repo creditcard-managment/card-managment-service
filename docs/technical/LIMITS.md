@@ -447,7 +447,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 | `card-data` | `card-limits` lee `cards.status` y `cards.deleted` | Funciona (acoplamiento por base compartida) |
 | `card-lifecycle` | Lee `credit_limits` por `card_id` para decidir si se puede activar | La regla existe pero el endpoint de activación no la usa ([LIFECYCLE.md §9](LIFECYCLE.md)); además esa consulta no filtra `deleted` |
 | `payment-processing` | Valida (`validate/*`), consume al aprobar (`consume-*`) y restaura en reversos y devoluciones (`restore-credit`) por REST | Funciona ([PAYMENT.md §7](PAYMENT.md)) |
-| `card-events` | Existen los topics `credit-limit.*` y clases vacías | `card-limits` no publica eventos |
+| `card-events` | Existen los topics `credit-limit.*` y sus contratos ([EVENTS.md §4.9](EVENTS.md)) | `card-limits` no publica eventos |
 
 ---
 

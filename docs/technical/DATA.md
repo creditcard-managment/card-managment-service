@@ -9,7 +9,7 @@
 | Puerto | `8081` |
 | Base path REST | `/api/v1/cards` |
 | Base de datos | PostgreSQL `card_management_db`, tabla `cards` |
-| Mensajería | Kafka (productor) — topic `card.created` |
+| Mensajería | Kafka (productor, vía outbox) — topics `card.*` |
 | Dependencias internas | `card-shared` (Value Objects, excepciones, cifrado), `card-events` (eventos y topics) |
 | Swagger UI | `http://localhost:8081/swagger-ui.html` |
 
@@ -22,14 +22,14 @@
 ```mermaid
 flowchart LR
     Client[Cliente / Canal] -->|REST| CD[card-data :8081]
-    CD -->|card.created| K[(Kafka)]
-    K --> CL[card-lifecycle :8083]
+    CD -->|card.*| K[(Kafka)]
+    K -->|card.created| CL[card-lifecycle :8083]
     CL -->|PUT /status<br/>PUT /activated-at<br/>PUT /card-data| CD
     PP[payment-processing :8085] -.->|validación de tarjeta| CD
     CD --> DB[(PostgreSQL<br/>tabla cards)]
 ```
 
-- **Crea** la tarjeta en estado `REQUESTED` y notifica al ecosistema vía Kafka.
+- **Crea** la tarjeta en estado `REQUESTED` y **notifica cada cambio de estado** al ecosistema vía Kafka (§8).
 - **card-lifecycle** consume `card.created`, gestiona aprobación, rechazo, emisión, activación, bloqueo y cancelación, y escribe de vuelta en `card-data` el nuevo estado, la fecha de activación, los datos generados en la emisión (PAN, CVV, PIN, vencimiento) y los motivos de bloqueo y cancelación. No escribe la tabla `cards` directamente.
 - **Expone** operaciones de seguridad (bloqueo, bloqueo por fraude, desbloqueo) y de PIN (validación y cambio).
 
@@ -47,7 +47,7 @@ com.unisono.card.data
 │   │                  ValidatePIN, ResetPIN, UpdateCardStatus)
 │   ├── port.output    CardRepository, EncryptionPort, EventOutboxPort
 │   └── service        CardManagementService, CardSecurityService,
-│                      PINManagementService
+│                      PINManagementService, CardEventEmitter
 ├── application
 │   ├── dto            Requests / Responses de la API
 │   └── mapper         CardDtoMapper (DTO ⇄ dominio)
@@ -260,10 +260,10 @@ Reciben DTOs validados con Bean Validation (`UpdateCardStatusRequest`, `UpdateAc
 
 | Método y ruta | Body | Efecto |
 |---|---|---|
-| `PUT /{cardId}/status` | `{ "status": "APPROVED", "reason": "…" }` (`reason` opcional, máx. 500) | Cambia el estado validando la transición |
+| `PUT /{cardId}/status` | `{ "status": "APPROVED", "reason": "…", "performedBy": "…" }` (`reason` opcional, máx. 500; `performedBy` opcional, máx. 100) | Cambia el estado validando la transición y publica el evento (§8) |
 | `PUT /{cardId}/activated-at` | `{ "activatedAt": "2026-11-02T10:15:30" }` | Fecha de activación (ISO-8601) |
 | `PUT /{cardId}/card-data` | `{ "cardNumber": "...", "cvv": "...", "pin": "...", "expirationMonth": 12, "expirationYear": 2030 }` | Carga datos de emisión; el PAN y el CVV se cifran y el PIN se hashea al persistir. PAN de 13–19 dígitos (+ Luhn), CVV de 3–4, PIN de 4, mes 1–12; el vencimiento no puede estar en el pasado ni a más de 10 años |
-| `POST /{cardId}/cancel` | `{ "reason": "Cliente solicitó cancelación" }` (obligatorio, máx. 500) | → `CANCELLED` validando la transición; guarda `cancelled_reason` y `cancelled_at`. A diferencia del resto de la tabla, responde **200** `CardResponse` |
+| `POST /{cardId}/cancel` | `{ "reason": "Cliente solicitó cancelación", "performedBy": "…" }` (`reason` obligatorio, máx. 500; `performedBy` opcional) | → `CANCELLED` validando la transición; guarda `cancelled_reason` y `cancelled_at`. A diferencia del resto de la tabla, responde **200** `CardResponse` |
 
 ### 4.2 Seguridad (`CardSecurityController`)
 
@@ -271,9 +271,11 @@ Reciben DTOs validados con Bean Validation (`UpdateCardStatusRequest`, `UpdateAc
 
 | Método y ruta | Body | Resultado |
 |---|---|---|
-| `POST /{cardId}/block` | `{ "reason": "Tarjeta perdida" }` (obligatorio) | → `BLOCKED`, **200** `CardResponse` |
-| `POST /{cardId}/block-fraud` | `{ "reason": "..." }` (obligatorio) | → `BLOCKED_FRAUD`, **200** `CardResponse` |
-| `POST /{cardId}/unblock` | — | → `ACTIVE`, **200** `CardResponse`. Si no estaba bloqueada → **422** |
+| `POST /{cardId}/block` | `{ "reason": "Tarjeta perdida", "performedBy": "…" }` (`reason` obligatorio) | → `BLOCKED`, **200** `CardResponse` |
+| `POST /{cardId}/block-fraud` | `{ "reason": "...", "performedBy": "…" }` (`reason` obligatorio) | → `BLOCKED_FRAUD`, **200** `CardResponse` |
+| `POST /{cardId}/unblock` | Opcional: `{ "reason": "…", "performedBy": "…" }` | → `ACTIVE`, **200** `CardResponse`. Si no estaba bloqueada → **422** |
+
+`performedBy` (opcional, máx. 100) es el autor que se publica en el evento; si falta, es `"system"`.
 
 ### 4.3 PIN (`PINController`)
 
@@ -405,7 +407,7 @@ sequenceDiagram
 
 ### 5.4 PIN
 
-- **Validación**: `BCrypt.verify(pinPlano, pinHash)`. Cada fallo suma en `pin_failed_attempts`; al tercero consecutivo la tarjeta se bloquea automáticamente. Un PIN correcto reinicia el contador.
+- **Validación**: `BCrypt.verify(pinPlano, pinHash)`. Cada fallo suma en `pin_failed_attempts`; al tercero consecutivo la tarjeta se bloquea automáticamente y se publica `card.blocked` con autor `system`. Un PIN correcto reinicia el contador.
 - **Cambio**: verifica el PIN actual (si existe; un fallo cuenta como intento), hashea el nuevo, reemplaza `pinHash` y reinicia el contador.
 - **Desbloqueo**: `POST /{cardId}/unblock` también reinicia el contador, para que la tarjeta no se vuelva a bloquear con el primer error.
 - Con la tarjeta bloqueada, validar o cambiar el PIN responde **422**.
@@ -513,11 +515,20 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 
 ## 8. Eventos
 
-| Evento | Topic | Key | Cuándo | Consumidor |
-|---|---|---|---|---|
-| `CardCreatedEvent` | `card.created` | `cardId` | Alta de tarjeta, vía outbox (§5.1) | `card-lifecycle` (`CardEventConsumer`, idempotente: una sola transición `CREATE` por tarjeta) |
+`CardEventEmitter` encola el evento en la misma transacción que guarda el cambio: si la operación falla o se rechaza, no se publica nada. Todos usan el outbox (§5.1) y la key `cardId`.
 
-Payload (JSON, sin headers de tipo):
+| Evento | Topic | Cuándo | Consumidor |
+|---|---|---|---|
+| `CardCreatedEvent` | `card.created` | Alta de tarjeta | `card-lifecycle` (`CardEventConsumer`, idempotente: una sola transición `CREATE` por tarjeta) |
+| `CardApprovedEvent` | `card.approved` | → `APPROVED` | — |
+| `CardRejectedEvent` | `card.rejected` | → `REJECTED` | — |
+| `CardIssuedEvent` | `card.issued` | → `ISSUED` (solo últimos 4 dígitos y vencimiento) | — |
+| `CardActivatedEvent` | `card.activated` | `ISSUED` → `ACTIVE` | — |
+| `CardBlockedEvent` | `card.blocked` | → `BLOCKED` / `BLOCKED_FRAUD`, incluido el bloqueo automático por PIN | — |
+| `CardUnblockedEvent` | `card.unblocked` | Bloqueada → `ACTIVE` | — |
+| `CardCancelledEvent` | `card.cancelled` | → `CANCELLED` | — |
+
+Pasar a `EXPIRED` no publica ningún evento. Los contratos están en [EVENTS.md §4](EVENTS.md). Ejemplo de payload (JSON, sin headers de tipo):
 
 ```json
 {
@@ -543,8 +554,7 @@ Payload (JSON, sin headers de tipo):
 - Publica el JSON almacenado tal cual y espera el ack del broker.
 - Ante un error transitorio registra `attempts` y `last_error` y corta el lote, para no publicar fuera de orden; ante uno permanente marca `failed_at` y sigue (§5.1).
 
-
-Hoy **no se publican eventos** de bloqueo, desbloqueo ni cambio de PIN, aunque `card-events` ya define los topics `card.blocked` y `card.unblocked`. Ver [EVENTS.md](EVENTS.md).
+Cambiar el PIN no publica ningún evento.
 
 ---
 
