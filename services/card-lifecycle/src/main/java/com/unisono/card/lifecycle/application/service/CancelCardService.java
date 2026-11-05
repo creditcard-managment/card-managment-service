@@ -31,7 +31,7 @@ public class CancelCardService implements CancelCardUseCase {
                 CardLifecycleEvent.CANCEL,
                 CardLifecycleState.CANCELLED,
                 TransitionContext.of(command.reason(), command.cancelledBy()),
-                () -> cardDataClient.cancel(command.cardId(), command.reason())
+                () -> cardDataClient.cancel(command.cardId(), command.reason(), command.cancelledBy())
         );
 
         log.info("Tarjeta cancelada: {}", command.cardId().getValue());

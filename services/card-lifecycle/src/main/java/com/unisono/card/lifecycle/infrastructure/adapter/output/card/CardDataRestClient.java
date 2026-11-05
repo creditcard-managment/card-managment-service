@@ -53,8 +53,8 @@ public class CardDataRestClient implements CardDataClient {
     }
 
     @Override
-    public void updateStatus(CardId cardId, String status) {
-        Map<String, String> request = new HashMap<>();
+    public void updateStatus(CardId cardId, String status, String reason, String performedBy) {
+        Map<String, String> request = transitionBody(reason, performedBy);
         request.put("status", status);
 
         log.info("Actualizando estado de tarjeta vía REST: {} -> {}", cardId.getValue(), status);
@@ -63,21 +63,21 @@ public class CardDataRestClient implements CardDataClient {
     }
 
     @Override
-    public void block(CardId cardId, String reason) {
+    public void block(CardId cardId, String reason, String performedBy) {
         log.info("Bloqueando tarjeta vía REST: {}", cardId.getValue());
-        post(cardUrl(cardId) + "/block", Map.of("reason", reason), "bloquear", cardId);
+        post(cardUrl(cardId) + "/block", transitionBody(reason, performedBy), "bloquear", cardId);
     }
 
     @Override
-    public void blockForFraud(CardId cardId, String reason) {
+    public void blockForFraud(CardId cardId, String reason, String performedBy) {
         log.warn("Bloqueando tarjeta por fraude vía REST: {}", cardId.getValue());
-        post(cardUrl(cardId) + "/block-fraud", Map.of("reason", reason), "bloquear por fraude", cardId);
+        post(cardUrl(cardId) + "/block-fraud", transitionBody(reason, performedBy), "bloquear por fraude", cardId);
     }
 
     @Override
-    public void cancel(CardId cardId, String reason) {
+    public void cancel(CardId cardId, String reason, String performedBy) {
         log.info("Cancelando tarjeta vía REST: {}", cardId.getValue());
-        post(cardUrl(cardId) + "/cancel", Map.of("reason", reason), "cancelar", cardId);
+        post(cardUrl(cardId) + "/cancel", transitionBody(reason, performedBy), "cancelar", cardId);
     }
 
     @Override
@@ -119,6 +119,13 @@ public class CardDataRestClient implements CardDataClient {
     // =============================================
     // HELPERS
     // =============================================
+
+    private static Map<String, String> transitionBody(String reason, String performedBy) {
+        Map<String, String> body = new HashMap<>();
+        body.put("reason", reason);
+        body.put("performedBy", performedBy);
+        return body;
+    }
 
     private String cardUrl(CardId cardId) {
         return cardDataBaseUrl + "/api/v1/cards/" + cardId.getValue();

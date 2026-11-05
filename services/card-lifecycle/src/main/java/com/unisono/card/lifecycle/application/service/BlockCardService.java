@@ -31,7 +31,7 @@ public class BlockCardService implements BlockCardUseCase {
                 CardLifecycleEvent.BLOCK,
                 CardLifecycleState.BLOCKED,
                 TransitionContext.of(command.reason(), command.blockedBy()),
-                () -> cardDataClient.block(command.cardId(), command.reason())
+                () -> cardDataClient.block(command.cardId(), command.reason(), command.blockedBy())
         );
     }
 
@@ -44,7 +44,7 @@ public class BlockCardService implements BlockCardUseCase {
                 CardLifecycleEvent.BLOCK_FRAUD,
                 CardLifecycleState.BLOCKED_FRAUD,
                 TransitionContext.of(command.reason(), command.blockedBy()),
-                () -> cardDataClient.blockForFraud(command.cardId(), command.reason())
+                () -> cardDataClient.blockForFraud(command.cardId(), command.reason(), command.blockedBy())
         );
     }
 }

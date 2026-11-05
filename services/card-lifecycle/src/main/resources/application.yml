@@ -37,6 +37,13 @@ spring:
     listener:
       ack-mode: manual
 
+# Reintentos del consumidor antes de enviar un mensaje a dlq.card-events (1 s, 2 s, 4 s, 8 s)
+card-lifecycle:
+  kafka:
+    retry:
+      max-retries: 4
+      initial-interval-ms: 1000
+
 server:
   port: 8083
 

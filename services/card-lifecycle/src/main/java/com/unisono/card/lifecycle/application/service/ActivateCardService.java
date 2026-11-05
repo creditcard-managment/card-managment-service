@@ -42,7 +42,8 @@ public class ActivateCardService implements ActivateCardUseCase {
                         throw new BusinessRuleException(
                                 "PIN incorrecto: no se puede activar la tarjeta " + command.cardId().getValue());
                     }
-                    cardDataClient.updateStatus(command.cardId(), CardLifecycleState.ACTIVE.name());
+                    cardDataClient.updateStatus(command.cardId(), CardLifecycleState.ACTIVE.name(),
+                            command.reason(), command.activatedBy());
                     cardDataClient.updateActivatedAt(command.cardId(), LocalDateTime.now());
                 }
         );

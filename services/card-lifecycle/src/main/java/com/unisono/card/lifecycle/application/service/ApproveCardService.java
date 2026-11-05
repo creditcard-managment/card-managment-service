@@ -30,7 +30,8 @@ public class ApproveCardService implements ApproveCardUseCase {
                 CardLifecycleEvent.APPROVE,
                 CardLifecycleState.APPROVED,
                 TransitionContext.of(command.reason(), command.approvedBy()),
-                () -> cardDataClient.updateStatus(command.cardId(), CardLifecycleState.APPROVED.name())
+                () -> cardDataClient.updateStatus(command.cardId(), CardLifecycleState.APPROVED.name(),
+                        command.reason(), command.approvedBy())
         );
 
         log.info("Tarjeta aprobada exitosamente: {}", command.cardId().getValue());
