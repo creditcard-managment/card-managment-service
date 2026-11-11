@@ -175,6 +175,12 @@
                 <artifactId>maven-surefire-plugin</artifactId>
             </plugin>
 
+            <!-- Versión y executions (prepare-agent + report en fase test) heredadas del pluginManagement del pom raíz -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
+
         </plugins>
     </build>
 </project>
