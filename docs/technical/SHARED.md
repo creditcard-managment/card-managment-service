@@ -9,7 +9,7 @@
 | Dependencias | `spring-boot-starter`, `spring-security-crypto`, `commons-lang3`, `lombok` |
 | Paquetes | `…shared.domain.valueobject`, `…shared.domain.exception`, `…shared.infrastructure.security`, `…shared.infrastructure.config` |
 | Usada por | `card-data`, `card-lifecycle`, `card-limits`, `payment-processing` |
-| Tests | 8 clases: value objects (`CardStatus`, `CardId`, `CardNumber`, `ExpirationDate`, `Money`, `Percentage`, validación común) y `AesEncryptionService` |
+| Tests | 9 clases: value objects (`CardStatus`, `CardId`, `CardNumber`, `ExpirationDate`, `Money`, `Percentage`, validación común), `AesEncryptionService` y `Iso9564Format4PinBlock` |
 
 ---
 
@@ -22,7 +22,7 @@ flowchart TB
     subgraph shared[card-shared]
         VO[Value Objects<br/>CardId, CardNumber, CVV, PIN,<br/>ExpirationDate, ClientId, Money,<br/>Percentage, CardStatus]
         EX[Excepciones<br/>DomainException y derivadas]
-        SEC[Seguridad<br/>AesEncryptionService<br/>BCryptHashingService]
+        SEC[Seguridad<br/>AesEncryptionService<br/>BCryptHashingService<br/>Iso9564Format4PinBlock]
     end
     CD[card-data] --> VO & EX & SEC
     CL[card-lifecycle] --> VO & EX
@@ -348,6 +348,23 @@ Hash unidireccional para el **PIN**.
 
 Se verifica siempre con `verify()`, nunca comparando hashes: el salt hace que dos hashes del mismo PIN difieran.
 
+### 4.3 `Iso9564Format4PinBlock`
+
+Utilidad estática (no es un bean) para **PIN blocks ISO 9564-1 formato 4** (AES). El terminal cifra el PIN con una clave de cifrado de PIN (PEK) compartida con quien lo verifica; los sistemas intermedios solo reenvían el bloque.
+
+| Aspecto | Valor |
+|---|---|
+| Campo PIN (16 bytes) | `4` · largo del PIN · dígitos · relleno `A` hasta el nibble 15 · 8 bytes aleatorios (el mismo PIN da un bloque distinto cada vez) |
+| Campo PAN (16 bytes) | largo del PAN − 12 · PAN (12 a 19 dígitos; los más cortos se completan con ceros a la izquierda) · ceros |
+| Cifrado | `AES(K, AES(K, campo PIN) XOR campo PAN)`, `AES/ECB/NoPadding` de un bloque por paso |
+| Clave | AES de 16, 24 o 32 bytes |
+| PIN | 4 a 12 dígitos |
+
+- `encrypt(pin, pan, key)`: lo usan los terminales y los tests; ningún servicio cifra PINs.
+- `decrypt(pinBlock, pan, key)`: valida la estructura del campo PIN. Con otra clave u otro PAN la estructura no cierra y lanza `InvalidPinBlockException` (un `ValidationException`, 400), sin incluir el PIN ni el bloque en el mensaje.
+- Limpia los buffers intermedios después de usarlos. La única copia del PIN que queda es el `String` que devuelve `decrypt`.
+- La usa card-data en `validate-pin` ([DATA.md §4.3](DATA.md)).
+
 ## 5. Cómo usarla en un módulo
 
 1. Agregar la dependencia:
@@ -390,6 +407,7 @@ mvn -pl services/card-shared test
 | `CardIdTest` | UUID canónico, normalización a minúsculas, rechazo de ids no UUID |
 | `CardNumberTest` | Enmascarado para 13, 15, 16 y 19 dígitos, sanitización, BIN, Luhn y longitudes inválidas |
 | `AesEncryptionServiceTest` | Ida y vuelta con prefijo, IV aleatorio, rotación, datos legacy, clave desconocida o cambiada, ciphertext alterado, validaciones de configuración |
+| `Iso9564Format4PinBlockTest` | Ida y vuelta con PIN de 4 a 12 dígitos, bloque distinto en cada cifrado, estructura de los campos del formato 4, rechazo de otra tarjeta, otra clave y bloques mal formados, PAN corto y AES-256 |
 
 No hay tests de las reglas de `PIN` ni de `BCryptHashingService`.
 

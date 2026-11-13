@@ -425,7 +425,7 @@ Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, s
 
 ## 7. Seguridad de datos sensibles
 
-- En el camino REST (emisión), el PAN, el CVV y el PIN viajan **en claro** en el body hacia `card-data`, que los cifra (AES-GCM) y hashea (BCrypt). No hay TLS ni autenticación entre servicios.
+- En el camino REST (emisión), el PAN, el CVV y el PIN viajan **en claro** en el body hacia `card-data`, que los cifra (AES-GCM) y hashea (BCrypt). La activación también manda el PIN en claro a `validate-pin` (`pin`); los adelantos de payment-processing, en cambio, ya mandan un PIN block cifrado ([DATA.md §4.3](DATA.md)). No hay TLS ni autenticación entre servicios.
 - El módulo no lee ni escribe PAN, CVV ni PIN en la base: el cifrado y el hash son responsabilidad exclusiva de `card-data`.
 - `Card.getLastFourDigits()` se usa para logs seguros.
 - La API no tiene autenticación ni autorización: `approvedBy`, `blockedBy`, etc. son texto libre que envía el cliente.

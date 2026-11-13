@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.adapter.output.card;
 
+import com.unisono.card.payment.domain.model.PinBlock;
 import com.unisono.card.payment.domain.exception.CardValidationException;
 import com.unisono.card.payment.domain.exception.ExternalServiceException;
 import com.unisono.card.payment.domain.port.output.CardValidationPort.CardStatusSnapshot;
@@ -30,6 +31,7 @@ class CardValidationAdapterTest {
     private static final CardId CARD_ID = CardId.of("550e8400-e29b-41d4-a716-446655440000");
     private static final String CARD_URL = BASE + "/api/v1/cards/" + CARD_ID.getValue();
     private static final String PIN_URL = CARD_URL + "/validate-pin";
+    private static final PinBlock PIN_BLOCK = new PinBlock("8E2C1F0A5B3D4E6F7A8B9C0D1E2F3A4B", "pek-v1");
 
     private MockRestServiceServer server;
     private CardValidationAdapter adapter;
@@ -98,12 +100,14 @@ class CardValidationAdapterTest {
     void shouldPostPinToCardDataAndReturnResult() {
         server.expect(requestTo(PIN_URL))
                 .andExpect(method(HttpMethod.POST))
-                .andExpect(jsonPath("$.pin").value("1234"))
+                .andExpect(jsonPath("$.pinBlock").value(PIN_BLOCK.block()))
+                .andExpect(jsonPath("$.pinKeyId").value("pek-v1"))
+                .andExpect(jsonPath("$.pin").doesNotExist())
                 .andRespond(withSuccess("""
                         {"valid":true}
                         """, MediaType.APPLICATION_JSON));
 
-        assertThat(adapter.validatePin(CARD_ID, "1234")).isTrue();
+        assertThat(adapter.validatePin(CARD_ID, PIN_BLOCK)).isTrue();
         server.verify();
     }
 
@@ -113,14 +117,14 @@ class CardValidationAdapterTest {
                 {"valid":false}
                 """, MediaType.APPLICATION_JSON));
 
-        assertThat(adapter.validatePin(CARD_ID, "9999")).isFalse();
+        assertThat(adapter.validatePin(CARD_ID, PIN_BLOCK)).isFalse();
     }
 
     @Test
     void shouldReportBlockedCardWhenCardDataRejectsPinValidation() {
         server.expect(requestTo(PIN_URL)).andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY));
 
-        assertThatThrownBy(() -> adapter.validatePin(CARD_ID, "1234"))
+        assertThatThrownBy(() -> adapter.validatePin(CARD_ID, PIN_BLOCK))
                 .isInstanceOf(CardValidationException.class)
                 .hasMessageContaining("blocked");
     }
@@ -129,8 +133,17 @@ class CardValidationAdapterTest {
     void shouldFailPinValidationWhenCardDataIsDown() {
         server.expect(requestTo(PIN_URL)).andRespond(withServerError());
 
-        assertThatThrownBy(() -> adapter.validatePin(CARD_ID, "1234"))
+        assertThatThrownBy(() -> adapter.validatePin(CARD_ID, PIN_BLOCK))
                 .isInstanceOf(ExternalServiceException.class);
+    }
+
+    @Test
+    void shouldDeclineWithInvalidPinBlockWhenCardDataCannotDecryptIt() {
+        server.expect(requestTo(PIN_URL)).andRespond(withStatus(HttpStatus.BAD_REQUEST));
+
+        assertThatThrownBy(() -> adapter.validatePin(CARD_ID, PIN_BLOCK))
+                .isInstanceOf(CardValidationException.class)
+                .hasMessageContaining("Invalid PIN block");
     }
 
     // ========== CVV ==========
