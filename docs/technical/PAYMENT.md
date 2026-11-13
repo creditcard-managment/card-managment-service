@@ -139,6 +139,7 @@ stateDiagram-v2
 | `createPurchase(...)` | — | `PaymentInitiated` |
 | `createCashAdvance(...)` | — | `PaymentInitiated` (tipo `CASH_ADVANCE`) |
 | `createRefund(...)` | — | `RefundInitiated` |
+| `reconstitute(PersistedState)` | Estado completo (ids, tarjeta, comercio, tipo, monto, método, estado, fecha) | Ninguno: reconstruye una transacción guardada (lo usa `TransactionEntityMapper`, sin reflexión) |
 | `authorize(code, risk)` | No final y código aprobado (`"00"`) | `PaymentAuthorized` |
 | `assessRisk(score)` | No final. Guarda el score evaluado por el antifraude, también si después se rechaza | — |
 | `approve()` | Estado `AUTHORIZED` | `PaymentProcessed` |
@@ -594,6 +595,5 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 
 4. **Compensación sin revisión de fondos:** deshacer una restauración vuelve a consumir lo restaurado sin validar límites, así que el disponible puede quedar por debajo de lo que permitiría una compra nueva. Si la compensación ocurre otro día (u otro mes), el cupo diario (o mensual) ya se reseteó y no se vuelve a tocar.
 5. **Compensación sin alertas:** una operación que no se puede cancelar (card-limits caído) queda `PENDING` y se reintenta sin límite. Solo se ve en el log y en `payment_credit_operations.attempts`; no hay métrica ni alerta. Lo mismo pasa con los eventos fallidos del outbox.
-6. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
-7. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
-8. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. También de `TransactionReversalService`, `PreAuthorizationExpiryService`, la saga (`SagaCreditLimitPort`, compensador y reconciliador) y el outbox (publisher, relay y limpieza). Faltan los de controllers, persistencia (incluido el mapper por reflexión, el lock y las consultas nuevas) y `RefundApplicationService`.
+6. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
+7. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. También de `TransactionReversalService`, `PreAuthorizationExpiryService`, la saga (`SagaCreditLimitPort`, compensador y reconciliador), el outbox (publisher, relay y limpieza) y `TransactionEntityMapper` (ida y vuelta dominio → entidad → dominio). Faltan los de controllers, persistencia contra una base real (el lock y las consultas) y `RefundApplicationService`.
