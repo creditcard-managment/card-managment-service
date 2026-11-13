@@ -75,12 +75,10 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Métricas en formato Prometheus (/actuator/prometheus).
-             Variante simpleclient: los jars de Spring Boot son 3.2.x (parent) y su autoconfig busca
-             io.micrometer.prometheus.PrometheusMeterRegistry, que en Micrometer 1.13 (BOM 3.3.x) vive en este artifact -->
+        <!-- Métricas en formato Prometheus (/actuator/prometheus) -->
         <dependency>
             <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-registry-prometheus-simpleclient</artifactId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
         <!-- ========================================= -->
