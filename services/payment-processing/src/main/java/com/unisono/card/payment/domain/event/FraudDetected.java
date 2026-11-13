@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
  * Event published when fraud is detected in a transaction
  */
 @Getter
-public class FraudDetected extends DomainEvent {
+public class FraudDetected extends DomainEvent implements PaymentEvent {
 
     private final TransactionId transactionId;
     private final CardId cardId;

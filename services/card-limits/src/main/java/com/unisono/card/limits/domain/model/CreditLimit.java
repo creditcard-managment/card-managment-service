@@ -376,6 +376,43 @@ public class CreditLimit {
         return notRestored;
     }
 
+    /**
+     * Lo consumido, el cupo diario y el mensual en este momento. La diferencia entre dos fotos es lo que
+     * movió una operación ({@link CreditOperation}).
+     */
+    public ConsumptionSnapshot consumptionSnapshot() {
+        return new ConsumptionSnapshot(
+                this.consumedCredit.getAmount(),
+                this.dailyLimit.currentConsumed(),
+                this.monthlyLimit.currentConsumed()
+        );
+    }
+
+    /**
+     * Deshace exactamente lo que movió una operación: lo consumido y, si siguen siendo del mismo día o mes,
+     * el cupo diario y el mensual. Lo consumido no baja de cero. No valida límites: deshacer una
+     * restauración puede dejar el disponible por debajo de lo que permitiría una compra nueva.
+     */
+    public void revertOperation(CreditOperation operation) {
+        Money consumed = this.consumedCredit.getAmount().subtract(operation.getCreditDelta());
+        if (consumed.isNegative()) {
+            consumed = Money.zero(consumed.getCurrencyCode());
+        }
+        this.consumedCredit = ConsumedCredit.of(consumed);
+        this.dailyLimit = this.dailyLimit.revert(operation.getDailyDelta(), operation.getAppliedOn());
+        this.monthlyLimit = this.monthlyLimit.revert(operation.getMonthlyDelta(), YearMonth.from(operation.getAppliedOn()));
+
+        recalculateAvailableCredit();
+        touch();
+    }
+
+    public String getCurrencyCode() {
+        return this.purchaseLimit.getAmount().getCurrencyCode();
+    }
+
+    public record ConsumptionSnapshot(Money credit, Money daily, Money monthly) {
+    }
+
     // ========================================
     // BUSINESS LOGIC - VALIDATIONS
     // ========================================

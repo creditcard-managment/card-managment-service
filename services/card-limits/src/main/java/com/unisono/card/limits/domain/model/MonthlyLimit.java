@@ -85,6 +85,28 @@ public class MonthlyLimit implements Serializable {
     }
 
     /**
+     * Consumido en el mes en curso (cero si el cupo ya se reseteó)
+     */
+    public Money currentConsumed() {
+        return needsReset() ? Money.zero(this.consumed.getCurrencyCode()) : this.consumed;
+    }
+
+    /**
+     * Deshace lo que movió una operación en el cupo (positivo = había consumido, negativo = había devuelto).
+     * Solo aplica si la operación es del mes en curso: si no, el cupo ya se reseteó. Lo consumido no baja de cero.
+     */
+    public MonthlyLimit revert(Money delta, YearMonth appliedIn) {
+        if (delta.isZero() || needsReset() || !this.resetMonth.equals(appliedIn)) {
+            return this;
+        }
+        Money newConsumed = this.consumed.subtract(delta);
+        if (newConsumed.isNegative()) {
+            newConsumed = Money.zero(this.consumed.getCurrencyCode());
+        }
+        return new MonthlyLimit(this.amount, newConsumed, this.resetMonth);
+    }
+
+    /**
      * Verifica si necesita reset (cambió el mes)
      */
     /**

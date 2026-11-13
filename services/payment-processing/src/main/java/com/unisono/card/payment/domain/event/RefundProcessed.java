@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
  * Event published when a refund has been processed
  */
 @Getter
-public class RefundProcessed extends DomainEvent {
+public class RefundProcessed extends DomainEvent implements PaymentEvent {
 
     private final TransactionId refundTransactionId;
     private final TransactionId originalTransactionId;

@@ -54,6 +54,14 @@ public class CreditLimitRepositoryAdapter implements CreditLimitRepository {
     }
 
     @Override
+    public Optional<CreditLimit> findByIdForUpdate(String creditLimitId) {
+        log.debug("Locking credit limit: {}", creditLimitId);
+
+        return jpaRepository.findByIdForUpdate(creditLimitId)
+                .map(mapper::toDomain);
+    }
+
+    @Override
     public Optional<CreditLimit> findByCardId(CardId cardId) {
         log.debug("Finding credit limit for card: {}", cardId);
 

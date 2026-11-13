@@ -84,4 +84,24 @@ class CreditLimitRestoreTest {
         assertThatThrownBy(() -> creditLimit.restoreConsumption(Money.ofARS(0), LocalDate.now()))
                 .isInstanceOf(ValidationException.class);
     }
+
+    @Test
+    void shouldRevertAnOperationOfAnotherDayOnlyInTheConsumedCreditAndMonth() {
+        CreditLimit.ConsumptionSnapshot before = creditLimit.consumptionSnapshot();
+        creditLimit.consumeForPurchase(Money.ofARS(10_000));
+        CreditOperation applied = CreditOperation.applied("op", creditLimit.getId(), CreditOperation.Type.CONSUME_PURCHASE,
+                before, creditLimit.consumptionSnapshot(), "compra");
+        LocalDate yesterday = LocalDate.now().minusDays(1);
+        CreditOperation fromYesterday = CreditOperation.reconstitute("op", creditLimit.getId(),
+                CreditOperation.Type.CONSUME_PURCHASE, CreditOperation.Status.APPLIED, applied.getCreditDelta(),
+                applied.getDailyDelta(), applied.getMonthlyDelta(), yesterday, "compra", null, null);
+
+        creditLimit.revertOperation(fromYesterday);
+
+        assertThat(creditLimit.getConsumedCredit().getAmount()).isEqualTo(Money.ofARS(20_000));
+        assertThat(creditLimit.getDailyLimit().getConsumed()).isEqualTo(Money.ofARS(30_000));
+        boolean sameMonth = yesterday.getMonth() == LocalDate.now().getMonth();
+        assertThat(creditLimit.getMonthlyLimit().getConsumed())
+                .isEqualTo(sameMonth ? Money.ofARS(20_000) : Money.ofARS(30_000));
+    }
 }

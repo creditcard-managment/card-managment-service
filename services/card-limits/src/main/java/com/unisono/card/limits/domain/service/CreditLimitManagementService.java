@@ -2,9 +2,12 @@ package com.unisono.card.limits.domain.service;
 
 import com.unisono.card.limits.domain.model.CreditLimit;
 import com.unisono.card.limits.domain.model.CreditLimitHistory;
+import com.unisono.card.limits.domain.model.CreditOperation;
+import com.unisono.card.limits.domain.exception.CreditOperationCancelledException;
 import com.unisono.card.limits.domain.port.input.*;
 import com.unisono.card.limits.domain.port.output.CardValidationPort;
 import com.unisono.card.limits.domain.port.output.CreditLimitRepository;
+import com.unisono.card.limits.domain.port.output.CreditOperationRepository;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
@@ -16,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /**
  * Servicio de gestión de límites de crédito
@@ -38,6 +42,7 @@ public class CreditLimitManagementService implements
 
     private final CreditLimitRepository creditLimitRepository;
     private final CardValidationPort cardValidationPort;
+    private final CreditOperationRepository creditOperationRepository;
 
     // ========================================
     // AssignCreditLimitUseCase
@@ -213,36 +218,20 @@ public class CreditLimitManagementService implements
 
     @Override
     public CreditLimit consumeForPurchase(ConsumeCreditCommand command) {
-        log.info("Consuming credit for purchase: {} - Amount: {}",
-                command.creditLimitId(), command.amount());
+        log.info("Consuming credit for purchase: {} - Amount: {}{}",
+                command.creditLimitId(), command.amount(), operationLog(command.operationId()));
 
-        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
-
-        creditLimit.consumeForPurchase(command.amount());
-
-        CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
-
-        log.info("Credit consumed successfully. Available: {}",
-                savedLimit.getAvailableCredit().getAmount());
-
-        return savedLimit;
+        return applyOperation(command.creditLimitId(), command.operationId(), CreditOperation.Type.CONSUME_PURCHASE,
+                command.description(), creditLimit -> creditLimit.consumeForPurchase(command.amount()));
     }
 
     @Override
     public CreditLimit consumeForCashAdvance(ConsumeCreditCommand command) {
-        log.info("Consuming credit for cash advance: {} - Amount: {}",
-                command.creditLimitId(), command.amount());
+        log.info("Consuming credit for cash advance: {} - Amount: {}{}",
+                command.creditLimitId(), command.amount(), operationLog(command.operationId()));
 
-        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
-
-        creditLimit.consumeForCashAdvance(command.amount());
-
-        CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
-
-        log.info("Credit consumed successfully. Available: {}",
-                savedLimit.getAvailableCredit().getAmount());
-
-        return savedLimit;
+        return applyOperation(command.creditLimitId(), command.operationId(), CreditOperation.Type.CONSUME_CASH_ADVANCE,
+                command.description(), creditLimit -> creditLimit.consumeForCashAdvance(command.amount()));
     }
 
     @Override
@@ -250,7 +239,7 @@ public class CreditLimitManagementService implements
         log.info("Releasing credit: {} - Payment: {}",
                 command.creditLimitId(), command.paymentAmount());
 
-        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
+        CreditLimit creditLimit = lockCreditLimitOrThrow(command.creditLimitId());
 
         creditLimit.releaseCredit(command.paymentAmount());
 
@@ -264,23 +253,104 @@ public class CreditLimitManagementService implements
 
     @Override
     public CreditLimit restoreCredit(RestoreCreditCommand command) {
-        log.info("Restoring credit: {} - Amount: {} (original date {}) - {}",
-                command.creditLimitId(), command.amount(), command.originalTransactionDate(), command.description());
+        log.info("Restoring credit: {} - Amount: {} (original date {}) - {}{}",
+                command.creditLimitId(), command.amount(), command.originalTransactionDate(), command.description(),
+                operationLog(command.operationId()));
 
-        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
+        return applyOperation(command.creditLimitId(), command.operationId(), CreditOperation.Type.RESTORE,
+                command.description(), creditLimit -> {
+                    Money notRestored = creditLimit.restoreConsumption(command.amount(), command.originalTransactionDate());
+                    if (!notRestored.isZero()) {
+                        log.warn("Credit limit {}: {} not restored because it exceeds the consumed credit (already paid)",
+                                command.creditLimitId(), notRestored);
+                    }
+                });
+    }
 
-        Money notRestored = creditLimit.restoreConsumption(command.amount(), command.originalTransactionDate());
-        if (!notRestored.isZero()) {
-            log.warn("Credit limit {}: {} not restored because it exceeds the consumed credit (already paid)",
-                    command.creditLimitId(), notRestored);
+    @Override
+    public CancelOperationResult cancelOperation(CancelOperationCommand command) {
+        log.info("Cancelling credit operation {} of credit limit {}", command.operationId(), command.creditLimitId());
+
+        CreditLimit creditLimit = lockCreditLimitOrThrow(command.creditLimitId());
+        Optional<CreditOperation> existing = creditOperationRepository.findById(command.operationId());
+
+        if (existing.isEmpty()) {
+            creditOperationRepository.save(CreditOperation.voided(
+                    command.operationId(), command.creditLimitId(), creditLimit.getCurrencyCode()));
+            log.info("Credit operation {} had not been applied: voided", command.operationId());
+            return new CancelOperationResult(CancelOutcome.VOIDED, creditLimit);
         }
 
+        CreditOperation operation = existing.get();
+        validateOwnership(operation, command.creditLimitId());
+
+        if (!operation.isApplied()) {
+            log.info("Credit operation {} was already {}", command.operationId(), operation.getStatus());
+            return new CancelOperationResult(CancelOutcome.ALREADY_CANCELLED, creditLimit);
+        }
+
+        creditLimit.revertOperation(operation);
+        CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
+        operation.cancel();
+        creditOperationRepository.save(operation);
+
+        log.info("Credit operation {} ({}) cancelled. Available: {}",
+                command.operationId(), operation.getType(), savedLimit.getAvailableCredit().getAmount());
+        return new CancelOperationResult(CancelOutcome.CANCELLED, savedLimit);
+    }
+
+    /**
+     * Aplica un consumo o una restauración con el límite bloqueado. Con operationId es idempotente:
+     * una operación ya aplicada no se repite y una cancelada se rechaza.
+     */
+    private CreditLimit applyOperation(String creditLimitId, String operationId, CreditOperation.Type type,
+                                       String description, Consumer<CreditLimit> action) {
+        CreditLimit creditLimit = lockCreditLimitOrThrow(creditLimitId);
+
+        if (operationId != null) {
+            Optional<CreditOperation> existing = creditOperationRepository.findById(operationId);
+            if (existing.isPresent()) {
+                CreditOperation operation = existing.get();
+                validateOwnership(operation, creditLimitId);
+                if (!operation.isApplied()) {
+                    throw new CreditOperationCancelledException(operationId);
+                }
+                if (operation.getType() != type) {
+                    throw new BusinessRuleException(String.format(
+                            "La operación %s ya existe con otro tipo (%s)", operationId, operation.getType()));
+                }
+                log.info("Credit operation {} was already applied: nothing to do", operationId);
+                return creditLimit;
+            }
+        }
+
+        CreditLimit.ConsumptionSnapshot before = creditLimit.consumptionSnapshot();
+        action.accept(creditLimit);
         CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
 
-        log.info("Credit restored successfully. Available: {}",
-                savedLimit.getAvailableCredit().getAmount());
+        if (operationId != null) {
+            creditOperationRepository.save(CreditOperation.applied(
+                    operationId, creditLimitId, type, before, creditLimit.consumptionSnapshot(), description));
+        }
 
+        log.info("Credit operation {} applied. Available: {}", type, savedLimit.getAvailableCredit().getAmount());
         return savedLimit;
+    }
+
+    private static void validateOwnership(CreditOperation operation, String creditLimitId) {
+        if (!operation.getCreditLimitId().equals(creditLimitId)) {
+            throw new BusinessRuleException(String.format(
+                    "La operación %s pertenece a otro límite de crédito", operation.getOperationId()));
+        }
+    }
+
+    private static String operationLog(String operationId) {
+        return operationId != null ? " (operation " + operationId + ")" : "";
+    }
+
+    private CreditLimit lockCreditLimitOrThrow(String creditLimitId) {
+        return creditLimitRepository.findByIdForUpdate(creditLimitId)
+                .orElseThrow(() -> new NotFoundException("CreditLimit", creditLimitId));
     }
 
     // ========================================

@@ -125,6 +125,23 @@ authorization:
 # Actuator Configuration
 # Pre-authorizations: las que no se capturan ni se reversan a tiempo se reversan solas
 payment:
+  # Outbox: los eventos se guardan con la transacción y PaymentOutboxRelay los publica en Kafka
+  outbox:
+    poll-interval-ms: ${PAYMENT_OUTBOX_POLL_INTERVAL_MS:1000}
+    batch-size: 50
+    # Tiene que superar delivery.timeout.ms + max.block.ms del productor (KafkaPaymentConfig: 10000 + 5000)
+    send-timeout-ms: 16000
+    retention-days: 7
+    cleanup-cron: "0 0 3 * * *"
+  # Saga de crédito: compensa en card-limits las operaciones cuyo pago no confirmó
+  credit-saga:
+    reconciler:
+      enabled: ${PAYMENT_CREDIT_SAGA_RECONCILER_ENABLED:true}
+      initial-delay-ms: 30000
+      interval-ms: ${PAYMENT_CREDIT_SAGA_RECONCILER_INTERVAL_MS:30000}
+      # Antigüedad mínima de una operación PENDING para compensarla (más que el timeout de las llamadas REST)
+      stale-after-seconds: 60
+      batch-size: 20
   pre-authorization:
     expiration-hours: ${PRE_AUTHORIZATION_EXPIRATION_HOURS:168}  # 7 días
     expiry:

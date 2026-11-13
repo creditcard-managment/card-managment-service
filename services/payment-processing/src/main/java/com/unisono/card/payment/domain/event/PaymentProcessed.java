@@ -13,7 +13,7 @@ import java.time.LocalDateTime;
  * Event published when a payment has been processed (approved)
  */
 @Getter
-public class PaymentProcessed extends DomainEvent {
+public class PaymentProcessed extends DomainEvent implements PaymentEvent {
 
     private final TransactionId transactionId;
     private final CardId cardId;

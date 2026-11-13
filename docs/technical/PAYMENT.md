@@ -8,11 +8,11 @@
 | Clase principal | `com.unisono.card.payment.PaymentApplication` |
 | Puerto | `8085` (`SERVER_PORT`), el mismo que en docker-compose |
 | Base paths REST | `/api/v1/payments`, `/api/v1/refunds`, `/api/v1/reversals`, `/api/v1/settlements`, `/api/v1/transactions` |
-| Base de datos | PostgreSQL — tablas `transactions`, `transaction_items`, `transaction_receipts`; lee `merchants` y `payment_terminals` |
-| Mensajería | Kafka (productor) — topics `payment.*` |
+| Base de datos | PostgreSQL — tablas `transactions`, `transaction_items`, `transaction_receipts`, `payment_outbox_events`, `payment_credit_operations`; lee `merchants` y `payment_terminals` |
+| Mensajería | Kafka (productor, vía outbox) — topics `payment.*` |
 | Dependencias internas | `card-shared` (`Money`, `CardId`, `ExpirationDate`, …), `card-events` (`DomainEvent`) |
 | Integraciones REST | card-data, card-limits, servicio antifraude y autorizador (ver §7) |
-| Perfiles | `payment` (docker-compose), `dev`, `prod` |
+| Perfiles | Ninguno por defecto (docker-compose tampoco usa); opcionales `dev` y `prod` |
 | Swagger UI | `/swagger-ui.html` |
 
 > **Estado actual:** compras, adelantos, reversos, devoluciones y liquidación funcionan de punta a punta contra card-data y card-limits. El antifraude y el autorizador siguen siendo locales o simulados. Ver §10 para las limitaciones.
@@ -64,10 +64,14 @@ com.unisono.card.payment
 └── infrastructure
     ├── adapter.input.rest   Payment, Refund, Reversal, Settlement, Transaction controllers;
     │                        GlobalExceptionHandler
-    ├── adapter.output       authorization, card, creditlimit, fraud (REST);
-    │                        merchant (JPA de solo lectura); event (Kafka); persistence (JPA)
+    ├── adapter.output       authorization, card, fraud (REST);
+    │                        creditlimit: CreditLimitAdapter (REST) + saga (SagaCreditLimitPort,
+    │                        CreditOperationJournal, CreditOperationCompensator, CreditOperationReconciler);
+    │                        merchant (JPA de solo lectura);
+    │                        event: outbox (OutboxPaymentEventPublisher, PaymentOutboxRelay, PaymentOutboxCleaner);
+    │                        persistence (JPA)
     └── config               DatabaseConfig (DataSource + EMF + TxManager propios),
-                             KafkaPaymentConfig, RestTemplateConfig, BeanConfig, OpenApiConfig
+                             KafkaPaymentConfig, RestTemplateConfig, BeanConfig, OpenApiConfig, SchedulingConfig
 ```
 
 | Caso de uso | Implementación | Endpoints |
@@ -179,7 +183,8 @@ sequenceDiagram
     participant CL as card-limits
     participant FR as Antifraude
     participant AU as Autorizador
-    participant DB as transactions
+    participant DB as PostgreSQL
+    participant R as PaymentOutboxRelay
     participant K as Kafka
 
     C->>AS: POST /payments/purchase
@@ -193,12 +198,14 @@ sequenceDiagram
     DS->>FR: risk score (una vez) → assessRisk + ¿sospechosa? + velocity
     DS->>AU: requestAuthorization (declinado → corta acá)
     DS->>DS: authorize(code, score) → AUTHORIZED
-    DS->>CL: POST /{creditLimitId}/consume-purchase
+    DS->>DB: payment_credit_operations: PENDING (transacción propia, §4.7)
+    DS->>CL: POST /{creditLimitId}/consume-purchase (operationId)
     DS->>DS: approve → APPROVED
     Note over DS: Cualquier rechazo desde la creación → decline → DECLINED
-    AS->>DB: save (aprobada o rechazada)
-    AS->>K: PaymentInitiated + PaymentAuthorized, PaymentProcessed (o PaymentDeclined)
+    AS->>DB: save + payment_outbox_events + operación CONFIRMED (una sola transacción)
     AS-->>C: 201 / 402 PaymentResponse
+    R->>DB: pendientes (FOR UPDATE SKIP LOCKED)
+    R->>K: PaymentInitiated + PaymentAuthorized, PaymentProcessed (o PaymentDeclined)
 ```
 
 Puntos clave:
@@ -222,7 +229,7 @@ Puntos clave:
 - **CVV:** en `ONLINE` y `MANUAL` es obligatorio y se verifica contra card-data (`POST /cards/{id}/validate-cvv`) después del estado de la tarjeta. Si se envía en otro método, también se verifica. Incorrecto o faltante → `DECLINED` `N7`.
 - El crédito se **consume** en card-limits al aprobar (baja el disponible y los acumulados diario y mensual), después de que el autorizador aprobó. Una transacción rechazada nunca lo consume. Un reverso o una devolución lo **restauran** con `restore-credit` (disponible y, si la original es del día o del mes en curso, el cupo diario y mensual). Liquidar no lo toca.
 - Si card-data o card-limits no responden, el pago no se procesa: **503** `SERVICE_UNAVAILABLE`.
-- Los eventos se publican **dentro de la transacción de base**, antes del commit.
+- Los eventos se guardan en el **outbox** con la transacción y se publican después del commit. El consumo de crédito queda atado a esa misma transacción: si no confirma, se deshace en card-limits (§4.7).
 
 ### 4.2 Adelanto en efectivo
 
@@ -272,6 +279,31 @@ Sirve para cobros cuyo importe se confirma después (hotel, alquiler, combustibl
 4. **Expiración:** `PreAuthorizationExpiryScheduler` corre cada `payment.pre-authorization.expiry.interval-ms` (15 min). Busca las `PURCHASE` en `AUTHORIZED` autorizadas hace más de `payment.pre-authorization.expiration-hours` (168 h = 7 días) y las reversa como en el paso 3, con el motivo `Pre-authorization expired…`. Cada una va en su propia transacción de base: si una falla, se loguea y se reintenta en la próxima corrida. Se desactiva con `payment.pre-authorization.expiry.enabled=false`.
 
 La captura es siempre por el monto total preautorizado.
+
+### 4.7 Consistencia con card-limits y Kafka (saga y outbox)
+
+Una transacción de pago toca tres sistemas: su tabla, card-limits (REST) y Kafka. La base es la única que confirma o deshace de forma atómica, así que las otras dos se atan a su transacción.
+
+**Outbox (eventos).** `OutboxPaymentEventPublisher` guarda cada evento en `payment_outbox_events` dentro de la transacción de la operación (`MANDATORY`). Si la transacción no confirma, el evento no existe. `PaymentOutboxRelay` publica los pendientes cada segundo, en orden de inserción y esperando la confirmación del broker, con el **card id como key**. Ante un error transitorio (broker caído) corta el lote y reintenta en la próxima pasada, sin límite. Ante uno permanente (payload inválido, mensaje demasiado grande) marca el evento `failed_at` y sigue. La semántica es at-least-once: un consumidor tiene que deduplicar por `eventId`. `PaymentOutboxCleaner` borra a las 3 AM los publicados hace más de 7 días; los fallidos quedan para revisión. Es el mismo patrón que card-data ([DATA.md §5.1](DATA.md)), en una tabla propia porque el relay de card-data lee `outbox_events`.
+
+**Saga (crédito).** `SagaCreditLimitPort` envuelve cada consumo (`consume-purchase`, `consume-cash-advance`) y cada restauración (`restore-credit` en reversos y devoluciones):
+
+1. Registra la operación **`PENDING`** en `payment_credit_operations`, en una transacción propia que confirma antes de llamar. Así queda registrada aunque el pago nunca confirme.
+2. La toma con `SELECT … FOR UPDATE` en la transacción del pago y llama a card-limits con su `operationId` (un UUID por operación). En card-limits cada `operationId` se aplica una sola vez ([LIMITS.md](LIMITS.md)).
+3. Si card-limits la aplica, la marca **`CONFIRMED`** en la transacción del pago. Si la rechaza (400/422: crédito insuficiente), la marca **`REJECTED`**: no aplicó nada.
+4. Si la transacción del pago **no confirma** (falla card-limits, el guardado, el outbox o el commit), la operación sigue `PENDING`:
+   - Apenas termina la transacción, `CreditOperationCompensator` la cancela en card-limits (`POST /{creditLimitId}/operations/{operationId}/cancel`) y la marca **`COMPENSATED`**.
+   - Si eso falla, si el proceso se cae o si no se sabe si el commit llegó, `CreditOperationReconciler` la compensa después. Corre cada 30 s y solo toma las `PENDING` de más de 60 s que ninguna transacción tiene tomadas (`FOR UPDATE SKIP LOCKED`). Reintenta sin límite.
+
+Cancelar es seguro en todos los casos. Si la operación se aplicó, card-limits la deshace exactamente: devuelve lo consumido o vuelve a consumir lo restaurado. Si no llegó a aplicarse (timeout antes de llegar), la anula y la rechaza si llega después. Así un timeout de card-limits nunca deja el crédito movido sin una transacción que lo respalde.
+
+| Falla | Resultado |
+|---|---|
+| card-limits rechaza el consumo | `REJECTED`; la transacción se guarda `DECLINED` `51` |
+| card-limits no responde o da timeout | El pago responde 503 y no se guarda; la operación se cancela (deshecha o anulada) |
+| Falla el guardado, el outbox o el commit | No se guarda nada; la operación se cancela en card-limits |
+| El proceso se cae entre la llamada y el commit | La operación queda `PENDING` y la cancela el reconciliador |
+| Kafka caído | La transacción se guarda igual; los eventos esperan en el outbox |
 
 ---
 
@@ -433,7 +465,7 @@ En compras y adelantos, `InsufficientFundsException`, `FraudDetectedException`, 
 | Puerto | Destino | Llamadas | URL por defecto (`services.*`) |
 |---|---|---|---|
 | `CardValidationPort` | card-data | `GET /api/v1/cards/{cardId}` → `status`, `isBlocked`, `isExpired`; `POST /api/v1/cards/{cardId}/validate-pin` → `valid` (adelantos); `POST …/validate-cvv` → `valid` (`ONLINE`/`MANUAL`) | `CARD_DATA_SERVICE_URL` = `http://localhost:8081` |
-| `CreditLimitPort` | card-limits | `POST /api/v1/credit-limits/validate/purchase` · `…/validate/cash-advance`; `GET …/card/{cardId}` (resuelve el `creditLimitId`); `POST …/{creditLimitId}/consume-purchase` · `…/consume-cash-advance` · `…/restore-credit` (reversos y devoluciones) | `CARD_LIMITS_SERVICE_URL` = `http://localhost:8082` |
+| `CreditLimitPort` (`SagaCreditLimitPort` → `CreditLimitAdapter`) | card-limits | `POST /api/v1/credit-limits/validate/purchase` · `…/validate/cash-advance`; `GET …/card/{cardId}` (resuelve el `creditLimitId`); `POST …/{creditLimitId}/consume-purchase` · `…/consume-cash-advance` · `…/restore-credit` (reversos y devoluciones), con `operationId`; `POST …/{creditLimitId}/operations/{operationId}/cancel` (compensación, §4.7) | `CARD_LIMITS_SERVICE_URL` = `http://localhost:8082` |
 | `MerchantValidationPort` | Base compartida | `merchants` (existe y `status = 'ACTIVE'`) y `payment_terminals` (terminal `ACTIVE` → `merchant_id`), por JPA de solo lectura | — |
 | `FraudCheckPort` | Servicio antifraude | `/api/v1/fraud/*` | `FRAUD_DETECTION_SERVICE_URL` = `http://localhost:8086` (no existe en el repo; si no responde se usa el cálculo local) |
 | `AuthorizationPort` | Autorizador | `/api/v1/authorization/*` | `AUTHORIZATION_SERVICE_URL` = `http://localhost:8087` (no existe en el repo); simulado por defecto |
@@ -457,7 +489,9 @@ No hay un servicio de comercios: `merchants` y `payment_terminals` (V4) se carga
 | Validación de crédito | `approved=false` | `DECLINED` `51` (402) con el motivo |
 | Validación de crédito | 404 (sin límite asignado) | `DECLINED` `51` (402) (`Card has no credit limit`) |
 | Consumo de crédito | 400 / 422 (el disponible cambió entre la validación y el consumo) | Se anula la autorización y `DECLINED` `51` (402) |
-| Crédito (cualquier llamada) | Error de red o 5xx | 503 `SERVICE_UNAVAILABLE` |
+| Crédito (cualquier llamada) | Error de red o 5xx | 503 `SERVICE_UNAVAILABLE`. Si era un consumo o una restauración, se cancela en card-limits (§4.7) |
+| Consumo o restauración | 409 (la operación ya se había cancelado) | 503 y se compensa: no debería pasar, porque cada intento usa un `operationId` nuevo |
+| Cancelación (compensación) | Error | La operación sigue `PENDING` y la reintenta el reconciliador |
 | Score de fraude | Error | Score local |
 | Velocity, geolocalización, anomalía | Error | Sin anomalía, no bloquea |
 
@@ -471,20 +505,23 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 |---|---|---|
 | `PaymentInitiated` | `payment.processing.initiated` | Al crear una compra o un adelanto (también si después se rechaza) |
 | `PaymentAuthorized` | `payment.processing.authorized` | `authorize()` |
-| `PaymentProcessed` | `payment.processing.completed` | `approve()` (compra y devolución) |
+| `PaymentProcessed` | `payment.processing.completed` | `approve()`: compra o captura |
 | `PaymentDeclined` | `payment.processing.declined` | `decline()`: compra o adelanto rechazado |
 | `PaymentReversed` | `payment.reversal.completed` | `reverse()` |
 | `RefundInitiated` | `payment.refund.initiated` | Al crear una devolución |
+| `RefundProcessed` | `payment.refund.processed` | `approveRefund()`: la devolución queda aprobada |
 | `TransactionSettled` | `payment.settlement.completed` | `settle()` |
 | `TransactionCompleted` | `payment.transaction.completed` | `complete()` (sin uso) |
-| `RefundProcessed`, `FraudDetected` | `payment.refund.processed`, `payment.fraud.detected` | Nunca |
+| `FraudDetected` | `payment.fraud.detected` | Nunca |
 
 **Productor:**
 
-- `acks=all`, idempotente, 3 reintentos, `lz4`, `linger.ms=10`, sin type headers.
-- Key = `eventId`.
+- Los eventos salen del outbox (`payment_outbox_events`) a través de `PaymentOutboxRelay`, después del commit (§4.7). At-least-once: el consumidor deduplica por `eventId`.
+- Key = **card id**: los eventos de una tarjeta (y de cada una de sus transacciones) quedan en la misma partición y en orden. Todos los eventos implementan `PaymentEvent` (`getCardId()`).
+- Payload: el JSON que serializa el `ObjectMapper` de Spring al guardar el evento. El relay lo envía tal cual.
+- `acks=all`, idempotente, 3 reintentos, `lz4`, `linger.ms=10`, sin type headers. Timeouts acotados (`request.timeout.ms=5000`, `delivery.timeout.ms=10000`, `max.block.ms=5000`) para que cada envío se resuelva antes de que el relay deje de esperar (`payment.outbox.send-timeout-ms=16000`).
 - `KafkaPaymentConfig` declara los 10 topics con **3 particiones** (`KAFKA_TOPIC_PARTITIONS`) y **replication factor 2** (`KAFKA_TOPIC_REPLICATION_FACTOR`). En docker-compose, con un solo broker, el factor es 1: si supera la cantidad de brokers, los topics no se crean al arrancar (`InvalidReplicationFactorException`).
-- El envío es asíncrono: un error del broker solo se loguea.
+- Nadie consume todavía estos topics.
 
 ---
 
@@ -492,7 +529,7 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 
 ### 9.1 Tablas (`ddl-auto: validate`)
 
-El esquema se crea con Flyway en el repo `card-management-database` (`migrations/V5__create_alter_table.sql`, `V6__create_table_items.sql`, `V7__create_receipt_table.sql`, `V11__refund_original_transaction.sql`). `transactions.card_id` y `merchant_id` son `VARCHAR(36)` con FK a `cards(id)` y `merchants(id)`. Las dos se cumplen porque, antes de guardar, la tarjeta se valida en card-data y el comercio en `merchants`. Un id de comercio inexistente o de más de 36 caracteres se rechaza con 400.
+El esquema se crea con Flyway en el repo `card-management-database` (`migrations/V5__create_alter_table.sql`, `V6__create_table_items.sql`, `V7__create_receipt_table.sql`, `V11__refund_original_transaction.sql`, `V12__payment_outbox_and_credit_operations.sql`). `transactions.card_id` y `merchant_id` son `VARCHAR(36)` con FK a `cards(id)` y `merchants(id)`. Las dos se cumplen porque, antes de guardar, la tarjeta se valida en card-data y el comercio en `merchants`. Un id de comercio inexistente o de más de 36 caracteres se rechaza con 400.
 
 **`transactions`**
 
@@ -515,6 +552,11 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 
 **De solo lectura** (V4, las administra el módulo de comercios): `merchants` (`id`, `legal_name`, `trade_name`, `status`) y `payment_terminals` (`id`, `merchant_id`, `terminal_type`, `status`).
 
+**Outbox y saga (V12):**
+
+- **`payment_outbox_events`:** igual que `outbox_events` de card-data (`event_id` único, `aggregate_id` = card id, `topic`, `event_type`, `payload` JSON, `created_at`, `published_at`, `failed_at`, `attempts`, `last_error`), con índices parciales de pendientes, publicados y fallidos. Para reintentar un fallido: `UPDATE payment_outbox_events SET failed_at = NULL WHERE id = …`.
+- **`payment_credit_operations`:** `operation_id` (PK, el que recibe card-limits), `transaction_id` (sin FK: la transacción puede no haberse guardado nunca), `card_id`, `operation_type` (`CONSUME_PURCHASE`, `CONSUME_CASH_ADVANCE`, `RESTORE`), `amount`, `currency`, `status` (`PENDING`, `CONFIRMED`, `REJECTED`, `COMPENSATED`), `attempts`, `last_error`, `created_at`, `updated_at`. Índice parcial de las `PENDING`. Una `PENDING` con muchos `attempts` indica que card-limits no responde a las cancelaciones.
+
 El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tiene consultas de estadísticas, sospechosas, duplicados y volumen por comercio, que tampoco se exponen.
 
 ### 9.2 Configuración
@@ -531,6 +573,10 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 | `payment.pre-authorization.expiry.enabled` · `.interval-ms` · `.initial-delay-ms` | `true` · `900000` · `60000` | Job de expiración |
 | `authorization.simulate-decline-above` | `${SIMULATE_AUTHORIZATION_DECLINE_ABOVE:50000.00}` | El simulador declina (`61`) los montos mayores a este valor |
 | `fraud.*` | umbrales alto 70 y medio 40, monto sospechoso 5.000 | Las reglas de velocidad las decide el servicio antifraude |
+| `payment.outbox.poll-interval-ms` · `.batch-size` · `.send-timeout-ms` | `${PAYMENT_OUTBOX_POLL_INTERVAL_MS:1000}` · `50` · `16000` | Relay del outbox. `send-timeout-ms` tiene que superar `delivery.timeout.ms + max.block.ms` del productor |
+| `payment.outbox.retention-days` · `.cleanup-cron` | `7` · `0 0 3 * * *` | Limpieza de publicados |
+| `payment.credit-saga.reconciler.enabled` · `.interval-ms` | `${PAYMENT_CREDIT_SAGA_RECONCILER_ENABLED:true}` · `${PAYMENT_CREDIT_SAGA_RECONCILER_INTERVAL_MS:30000}` | Reconciliador de la saga |
+| `payment.credit-saga.reconciler.stale-after-seconds` · `.batch-size` · `.initial-delay-ms` | `60` · `20` · `30000` | Antigüedad mínima para compensar una `PENDING`; tiene que superar el timeout de las llamadas REST (10 s) |
 | `management.endpoint.health.show-details` | `when-authorized` | |
 
 `DatabaseConfig` define `paymentDataSource` (Hikari, pool de 20, `autoCommit=false`), `paymentEntityManagerFactory` y `paymentTransactionManager` propios.
@@ -551,11 +597,10 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 ### 10.2 Técnicas
 
-4. **Consumo de crédito sin compensación:** card-limits se llama antes de `save()`. Si después falla el guardado o la publicación de eventos, el crédito queda consumido sin transacción que lo respalde. Lo mismo pasa con `restore-credit` en reversos y devoluciones. No hay saga ni reintento.
-5. **Eventos antes del commit:** se publican dentro de `@Transactional`. Si el commit falla, ya salieron eventos de una transacción inexistente. No hay outbox.
-6. **Key Kafka = `eventId`:** no hay orden por transacción ni por tarjeta. Nadie consume estos topics.
-7. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
-8. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
-9. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
-10. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
-11. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. También de `TransactionReversalService` y `PreAuthorizationExpiryService`. Faltan los de controllers, persistencia (incluido el mapper por reflexión, el lock y las consultas nuevas) y `RefundApplicationService`.
+4. **Compensación sin revisión de fondos:** deshacer una restauración vuelve a consumir lo restaurado sin validar límites, así que el disponible puede quedar por debajo de lo que permitiría una compra nueva. Si la compensación ocurre otro día (u otro mes), el cupo diario (o mensual) ya se reseteó y no se vuelve a tocar.
+5. **Compensación sin alertas:** una operación que no se puede cancelar (card-limits caído) queda `PENDING` y se reintenta sin límite. Solo se ve en el log y en `payment_credit_operations.attempts`; no hay métrica ni alerta. Lo mismo pasa con los eventos fallidos del outbox.
+6. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
+7. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
+8. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
+9. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
+10. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. También de `TransactionReversalService`, `PreAuthorizationExpiryService`, la saga (`SagaCreditLimitPort`, compensador y reconciliador) y el outbox (publisher, relay y limpieza). Faltan los de controllers, persistencia (incluido el mapper por reflexión, el lock y las consultas nuevas) y `RefundApplicationService`.

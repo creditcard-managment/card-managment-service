@@ -23,6 +23,11 @@ public interface CreditLimitRepository {
     Optional<CreditLimit> findById(String creditLimitId);
 
     /**
+     * Busca un límite de crédito bloqueándolo hasta el fin de la transacción
+     */
+    Optional<CreditLimit> findByIdForUpdate(String creditLimitId);
+
+    /**
      * Busca el límite de crédito de una tarjeta
      */
     Optional<CreditLimit> findByCardId(CardId cardId);

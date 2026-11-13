@@ -1,7 +1,9 @@
 package com.unisono.card.limits.infrastructure.adapter.output.persistence.repository;
 
 import com.unisono.card.limits.infrastructure.adapter.output.persistence.entity.CreditLimitEntity;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -32,4 +34,12 @@ public interface JpaCreditLimitRepository extends JpaRepository<CreditLimitEntit
      */
     @Query("SELECT c FROM CreditLimitEntity c WHERE c.id = :id AND c.deleted = false")
     Optional<CreditLimitEntity> findById(@Param("id") String id);
+
+    /**
+     * Igual que findById, pero bloquea la fila (SELECT ... FOR UPDATE) hasta el fin de la transacción.
+     * Serializa los consumos, restauraciones y cancelaciones de un mismo límite.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM CreditLimitEntity c WHERE c.id = :id AND c.deleted = false")
+    Optional<CreditLimitEntity> findByIdForUpdate(@Param("id") String id);
 }

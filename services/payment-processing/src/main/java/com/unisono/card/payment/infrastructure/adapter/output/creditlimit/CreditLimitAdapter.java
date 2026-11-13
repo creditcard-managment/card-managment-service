@@ -21,18 +21,23 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 /**
- * Adapter for managing credit limits via card-limits service
+ * REST client of card-limits
  *
  * - checkCredit: POST /api/v1/credit-limits/validate/purchase | cash-advance (disponible, diario y mensual)
  * - consumeCredit: POST /api/v1/credit-limits/{creditLimitId}/consume-purchase | consume-cash-advance
  * - restoreCredit: POST /api/v1/credit-limits/{creditLimitId}/restore-credit
+ * - cancelOperation: POST /api/v1/credit-limits/{creditLimitId}/operations/{operationId}/cancel
+ *
+ * Consumptions and restorations carry an operationId: card-limits applies each one once and can undo it
+ * exactly. {@link SagaCreditLimitPort} (the {@link CreditLimitPort} used by the domain) generates the ids and
+ * cancels the operations whose payment transaction did not commit.
  *
  * The creditLimitId is resolved with GET /api/v1/credit-limits/card/{cardId}.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class CreditLimitAdapter implements CreditLimitPort {
+public class CreditLimitAdapter {
 
     private static final String SERVICE = "card-limits";
     private static final String BASE_PATH = "/api/v1/credit-limits";
@@ -43,8 +48,7 @@ public class CreditLimitAdapter implements CreditLimitPort {
     @Value("${services.card-limits.url:http://localhost:8082}")
     private String cardLimitsServiceUrl;
 
-    @Override
-    public CreditCheck checkCredit(CardId cardId, Money amount, TransactionType type) {
+    public CreditLimitPort.CreditCheck checkCredit(CardId cardId, Money amount, TransactionType type) {
         log.debug("Checking credit for card: {}, amount: {}, type: {}", cardId, amount, type);
 
         String operation = type == TransactionType.CASH_ADVANCE ? "cash-advance" : "purchase";
@@ -61,30 +65,31 @@ public class CreditLimitAdapter implements CreditLimitPort {
                     response.getAvailableCredit() != null ? response.getAvailableCredit() : BigDecimal.ZERO,
                     response.getCurrency() != null ? response.getCurrency() : amount.getCurrencyCode()
             );
-            CreditCheck check = new CreditCheck(Boolean.TRUE.equals(response.getApproved()),
+            CreditLimitPort.CreditCheck check = new CreditLimitPort.CreditCheck(Boolean.TRUE.equals(response.getApproved()),
                     response.getReason(), available);
             log.debug("Credit check for card {}: {}", cardId, check);
             return check;
 
         } catch (HttpClientErrorException.NotFound ex) {
             log.warn("Card {} has no credit limit in card-limits", cardId);
-            return new CreditCheck(false, "Card has no credit limit", Money.zero(amount.getCurrencyCode()));
+            return new CreditLimitPort.CreditCheck(false, "Card has no credit limit", Money.zero(amount.getCurrencyCode()));
         } catch (RestClientException ex) {
             log.error("Error checking credit for {}: {}", cardId, ex.getMessage());
             throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
         }
     }
 
-    @Override
-    public void consumeCredit(CardId cardId, Money amount, TransactionType type, String description) {
-        log.debug("Consuming credit for card: {}, amount: {}, type: {}", cardId, amount, type);
+    public void consumeCredit(String operationId, CardId cardId, Money amount, TransactionType type,
+                              String description) {
+        log.debug("Consuming credit for card: {}, amount: {}, type: {}, operation: {}", cardId, amount, type, operationId);
 
         String creditLimitId = findCreditLimitId(cardId);
         String operation = type == TransactionType.CASH_ADVANCE ? "consume-cash-advance" : "consume-purchase";
         String url = String.format("%s%s/%s/%s", cardLimitsServiceUrl, BASE_PATH, creditLimitId, operation);
         try {
             restTemplate.postForObject(url,
-                    new ConsumeCreditRequest(amount.getAmount(), amount.getCurrencyCode(), truncate(description)),
+                    new ConsumeCreditRequest(amount.getAmount(), amount.getCurrencyCode(), truncate(description),
+                            operationId),
                     Void.class);
             log.info("Consumed credit for card {}: {}", cardId, amount);
 
@@ -102,21 +107,46 @@ public class CreditLimitAdapter implements CreditLimitPort {
         }
     }
 
-    @Override
-    public void restoreCredit(CardId cardId, Money amount, LocalDate originalTransactionDate, String description) {
-        log.debug("Restoring credit for card: {}, amount: {}, original date: {}", cardId, amount, originalTransactionDate);
+    public void restoreCredit(String operationId, CardId cardId, Money amount, LocalDate originalTransactionDate,
+                              String description) {
+        log.debug("Restoring credit for card: {}, amount: {}, original date: {}, operation: {}",
+                cardId, amount, originalTransactionDate, operationId);
 
         String creditLimitId = findCreditLimitId(cardId);
         String url = String.format("%s%s/%s/restore-credit", cardLimitsServiceUrl, BASE_PATH, creditLimitId);
         try {
             restTemplate.postForObject(url,
                     new RestoreCreditRequest(amount.getAmount(), amount.getCurrencyCode(),
-                            originalTransactionDate.toString(), truncate(description)),
+                            originalTransactionDate.toString(), truncate(description), operationId),
                     Void.class);
             log.info("Restored credit for card {}: {}", cardId, amount);
 
         } catch (RestClientException ex) {
             log.error("Error restoring credit for {}: {}", cardId, ex.getMessage());
+            throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * Undo an operation in card-limits. If it never arrived, card-limits voids it and rejects it if it arrives
+     * later. Idempotent.
+     *
+     * @return the outcome reported by card-limits (CANCELLED, VOIDED or ALREADY_CANCELLED)
+     */
+    public String cancelOperation(String operationId, CardId cardId) {
+        log.debug("Cancelling credit operation {} of card {}", operationId, cardId);
+
+        String creditLimitId = findCreditLimitId(cardId);
+        String url = String.format("%s%s/%s/operations/%s/cancel", cardLimitsServiceUrl, BASE_PATH,
+                creditLimitId, operationId);
+        try {
+            CancelOperationResponse response = restTemplate.postForObject(url, null, CancelOperationResponse.class);
+            String outcome = response != null ? response.getOutcome() : null;
+            log.info("Cancelled credit operation {} of card {}: {}", operationId, cardId, outcome);
+            return outcome;
+
+        } catch (RestClientException ex) {
+            log.error("Error cancelling credit operation {} of {}: {}", operationId, cardId, ex.getMessage());
             throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
         }
     }
@@ -177,6 +207,7 @@ public class CreditLimitAdapter implements CreditLimitPort {
         private BigDecimal amount;
         private String currency;
         private String description;
+        private String operationId;
     }
 
     @lombok.Data
@@ -186,5 +217,14 @@ public class CreditLimitAdapter implements CreditLimitPort {
         private String currency;
         private String originalTransactionDate; // ISO yyyy-MM-dd
         private String description;
+        private String operationId;
+    }
+
+    @lombok.Data
+    @lombok.NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class CancelOperationResponse {
+        private String operationId;
+        private String outcome;
     }
 }
