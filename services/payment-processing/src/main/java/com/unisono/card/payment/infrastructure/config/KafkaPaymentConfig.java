@@ -149,18 +149,6 @@ public class KafkaPaymentConfig {
         return createTopic(topicName);
     }
 
-    @Bean
-    public NewTopic transactionCompletedTopic(
-            @Value("${spring.kafka.topics.transaction.completed:payment.transaction.completed}") String topicName) {
-        return createTopic(topicName);
-    }
-
-    @Bean
-    public NewTopic fraudDetectedTopic(
-            @Value("${spring.kafka.topics.fraud.detected:payment.fraud.detected}") String topicName) {
-        return createTopic(topicName);
-    }
-
     /**
      * Create a topic with default configuration
      */
@@ -185,8 +173,6 @@ public class KafkaPaymentConfig {
                 "PaymentReversed:com.unisono.card.payment.domain.event.PaymentReversed," +
                 "RefundInitiated:com.unisono.card.payment.domain.event.RefundInitiated," +
                 "RefundProcessed:com.unisono.card.payment.domain.event.RefundProcessed," +
-                "TransactionSettled:com.unisono.card.payment.domain.event.TransactionSettled," +
-                "TransactionCompleted:com.unisono.card.payment.domain.event.TransactionCompleted," +
-                "FraudDetected:com.unisono.card.payment.domain.event.FraudDetected";
+                "TransactionSettled:com.unisono.card.payment.domain.event.TransactionSettled";
     }
 }

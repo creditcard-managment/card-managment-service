@@ -70,10 +70,6 @@ spring:
 
       transaction:
         settled: payment.settlement.completed
-        completed: payment.transaction.completed
-
-      fraud:
-        detected: payment.fraud.detected
 
 # Server Configuration
 server:

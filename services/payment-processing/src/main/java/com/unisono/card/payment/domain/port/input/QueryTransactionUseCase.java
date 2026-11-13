@@ -38,9 +38,4 @@ public interface QueryTransactionUseCase {
      * Find pending settlement transactions
      */
     List<Transaction> findPendingSettlement();
-
-    /**
-     * Find transactions requiring reversal (timeout, errors, etc.)
-     */
-    List<Transaction> findRequiringReversal();
 }

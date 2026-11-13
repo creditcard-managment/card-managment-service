@@ -281,20 +281,6 @@ public class Transaction {
     }
 
     /**
-     * Mark transaction as completed
-     */
-    public void complete() {
-        validateNotFinal();
-
-        addDomainEvent(new TransactionCompleted(
-                this.transactionId,
-                this.cardId,
-                this.status,
-                LocalDateTime.now()
-        ));
-    }
-
-    /**
      * Set terminal information
      */
     public void setTerminalInfo(String terminalId, String posEntryMode) {

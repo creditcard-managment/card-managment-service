@@ -45,7 +45,4 @@ public class PaymentResponse {
 
     private boolean approved;
     private String declineReason;
-
-    // Receipt information
-    private String receiptNumber;
 }
