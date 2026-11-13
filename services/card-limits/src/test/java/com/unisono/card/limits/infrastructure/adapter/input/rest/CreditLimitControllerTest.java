@@ -479,4 +479,27 @@ class CreditLimitControllerTest {
             verifyNoInteractions(mapper);
         }
     }
+
+    @Test
+    @DisplayName("cancelOperation informa el resultado y el exceso sobre el límite")
+    void cancelOperationReportsOutcomeAndOverLimit() {
+        CreditLimit real = CreditLimit.assign(CardId.of(CARD_ID), Money.ofARS(100_000), 0.3, "test");
+        when(recalculateAvailableCreditUseCase.cancelOperation(any())).thenReturn(
+                new RecalculateAvailableCreditUseCase.CancelOperationResult(
+                        RecalculateAvailableCreditUseCase.CancelOutcome.CANCELLED, real));
+
+        ResponseEntity<com.unisono.card.limits.application.dto.response.CancelOperationResponse> response =
+                controller.cancelOperation(CREDIT_LIMIT_ID, "op-1");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().getOutcome()).isEqualTo("CANCELLED");
+        assertThat(response.getBody().getOperationId()).isEqualTo("op-1");
+        assertThat(response.getBody().getAvailableCredit()).isEqualByComparingTo("100000");
+        assertThat(response.getBody().getOverLimitAmount()).isEqualByComparingTo("0");
+        ArgumentCaptor<RecalculateAvailableCreditUseCase.CancelOperationCommand> command =
+                ArgumentCaptor.forClass(RecalculateAvailableCreditUseCase.CancelOperationCommand.class);
+        verify(recalculateAvailableCreditUseCase).cancelOperation(command.capture());
+        assertThat(command.getValue().creditLimitId()).isEqualTo(CREDIT_LIMIT_ID);
+        assertThat(command.getValue().operationId()).isEqualTo("op-1");
+    }
 }

@@ -21,11 +21,14 @@ public class CreditOperationCompensator {
 
     public void compensate(String operationId, CardId cardId) {
         try {
-            String outcome = creditLimitAdapter.cancelOperation(operationId, cardId);
+            CreditLimitAdapter.Cancellation cancellation = creditLimitAdapter.cancelOperation(operationId, cardId);
             journal.markCompensated(operationId);
             monitor.compensationSucceeded(ConsistencyMonitor.SOURCE_IMMEDIATE);
             log.warn("↩️ Credit operation {} of card {} compensated after its payment transaction rolled back: {}",
-                    operationId, cardId, outcome);
+                    operationId, cardId, cancellation.outcome());
+            if (cancellation.leftOverLimit()) {
+                monitor.compensationLeftOverLimit(operationId, cardId.getValue(), cancellation.overLimitAmount());
+            }
         } catch (Exception ex) {
             log.error("Could not compensate credit operation {} of card {}, it will be retried: {}",
                     operationId, cardId, ex.getMessage());

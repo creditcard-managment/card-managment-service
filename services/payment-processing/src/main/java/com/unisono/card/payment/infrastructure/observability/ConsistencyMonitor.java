@@ -131,6 +131,20 @@ public class ConsistencyMonitor {
         }
     }
 
+    /**
+     * Deshacer una restauración dejó la tarjeta excedida: el reverso o la devolución no se guardaron, así que el
+     * crédito se volvió a consumir aunque ya se había gastado. Es correcto (el reverso nunca ocurrió), pero la
+     * tarjeta queda por encima de su límite y conviene que alguien lo vea
+     */
+    public void compensationLeftOverLimit(String operationId, String cardId, java.math.BigDecimal overLimitAmount) {
+        Counter.builder("payment.credit_saga.over_limit")
+                .description("Compensations that left the card over its credit limit")
+                .register(registry)
+                .increment();
+        log.warn("⚠️ Compensating credit operation {} left card {} over its limit by {}: the reversal or refund was not "
+                + "recorded, so its credit was consumed again after being spent", operationId, cardId, overLimitAmount);
+    }
+
     public void outboxPublishFailed(boolean transientError) {
         Counter.builder("payment.outbox.publish_failures")
                 .description("Failed attempts to publish a payment event")

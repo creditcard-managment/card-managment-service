@@ -112,6 +112,38 @@ class CreditOperationIdempotencyTest {
     }
 
     @Test
+    void shouldUndoARestorationEvenIfTheCardSpentThatCreditMeanwhileLeavingItOverLimit() {
+        service.consumeForPurchase(consume("op-1", 100_000));
+        // Reverso de esa compra (op-2) y, con el disponible recuperado, otra compra por casi todo el límite
+        service.restoreCredit(new RestoreCreditCommand(creditLimit.getId(), Money.ofARS(100_000), LocalDate.now(),
+                "reverso", "op-2"));
+        creditLimit.updateMonthlyLimit(Money.ofARS(1_000_000), "test", "test");
+        creditLimit.updateDailyLimit(Money.ofARS(1_000_000), "test", "test");
+        service.consumeForPurchase(consume("op-3", 450_000));
+
+        // El reverso no llegó a guardarse en payment-processing: se deshace aunque el crédito ya se gastó
+        CancelOperationResult result = service.cancelOperation(new CancelOperationCommand(creditLimit.getId(), "op-2"));
+
+        assertThat(result.outcome()).isEqualTo(CancelOutcome.CANCELLED);
+        assertThat(creditLimit.getConsumedCredit().getAmount()).isEqualTo(Money.ofARS(550_000));
+        assertThat(creditLimit.getAvailableCredit().getAmount()).isEqualTo(Money.ofARS(-50_000));
+        assertThat(result.creditLimit().getOverLimitAmount()).isEqualTo(Money.ofARS(50_000));
+        // Excedida: las compras siguientes se rechazan
+        assertThatThrownBy(() -> service.consumeForPurchase(consume("op-4", 1)))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessageContaining("Crédito insuficiente");
+    }
+
+    @Test
+    void shouldReportNoExcessWhenTheCancellationFitsTheLimit() {
+        service.consumeForPurchase(consume("op-1", 20_000));
+
+        CancelOperationResult result = service.cancelOperation(new CancelOperationCommand(creditLimit.getId(), "op-1"));
+
+        assertThat(result.creditLimit().getOverLimitAmount().isZero()).isTrue();
+    }
+
+    @Test
     void shouldRejectReplayingAnOperationIdWithAnotherType() {
         service.consumeForPurchase(consume("op-1", 20_000));
 

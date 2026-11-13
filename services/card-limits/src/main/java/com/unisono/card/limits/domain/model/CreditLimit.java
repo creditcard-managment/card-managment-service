@@ -390,8 +390,12 @@ public class CreditLimit {
 
     /**
      * Deshace exactamente lo que movió una operación: lo consumido y, si siguen siendo del mismo día o mes,
-     * el cupo diario y el mensual. Lo consumido no baja de cero. No valida límites: deshacer una
-     * restauración puede dejar el disponible por debajo de lo que permitiría una compra nueva.
+     * el cupo diario y el mensual. Lo consumido no baja de cero.
+     * <p>
+     * No valida límites, a propósito: deshacer una restauración significa que el reverso o la devolución nunca
+     * ocurrieron, así que lo restaurado se vuelve a consumir aunque la tarjeta haya gastado ese disponible
+     * mientras tanto. En ese caso queda excedida ({@link #getOverLimitAmount()}) y las compras siguientes se
+     * rechazan por crédito insuficiente hasta que pague.
      */
     public void revertOperation(CreditOperation operation) {
         Money consumed = this.consumedCredit.getAmount().subtract(operation.getCreditDelta());
@@ -404,6 +408,16 @@ public class CreditLimit {
 
         recalculateAvailableCredit();
         touch();
+    }
+
+    /**
+     * Cuánto supera lo consumido al límite de compras (cero si no está excedida). Solo puede pasar al deshacer
+     * una restauración ({@link #revertOperation}); los consumos normales validan el disponible.
+     */
+    public Money getOverLimitAmount() {
+        Money available = this.availableCredit.getAmount();
+        return available.isNegative() ? Money.zero(available.getCurrencyCode()).subtract(available)
+                : Money.zero(available.getCurrencyCode());
     }
 
     public String getCurrencyCode() {

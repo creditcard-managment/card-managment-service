@@ -78,10 +78,15 @@ public class CreditOperationReconciler {
 
         for (PaymentCreditOperationEntity operation : pending) {
             try {
-                String outcome = creditLimitAdapter.cancelOperation(operation.getOperationId(),
-                        CardId.of(operation.getCardId()));
+                CreditLimitAdapter.Cancellation cancellation = creditLimitAdapter.cancelOperation(
+                        operation.getOperationId(), CardId.of(operation.getCardId()));
+                String outcome = cancellation.outcome();
                 operation.markCompensated();
                 monitor.compensationSucceeded(ConsistencyMonitor.SOURCE_RECONCILER);
+                if (cancellation.leftOverLimit()) {
+                    monitor.compensationLeftOverLimit(operation.getOperationId(), operation.getCardId(),
+                            cancellation.overLimitAmount());
+                }
                 compensated++;
                 log.warn("↩️ Credit operation {} ({}, {} {}) of transaction {} compensated: {}",
                         operation.getOperationId(), operation.getOperationType(), operation.getAmount(),

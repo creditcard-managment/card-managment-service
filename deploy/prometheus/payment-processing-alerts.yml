@@ -30,6 +30,18 @@ groups:
           summary: "Saga de crédito: compensaciones fallando"
           description: "Más de 5 compensaciones fallidas en 15 min. ¿card-limits responde a POST /operations/{id}/cancel?"
 
+      - alert: CreditSagaCompensationLeftCardOverLimit
+        # Deshacer un reverso o una devolución que no se guardó volvió a consumir crédito ya gastado:
+        # es correcto, pero la tarjeta quedó por encima de su límite
+        expr: sum by (instance) (increase(payment_credit_saga_over_limit_total[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Saga de crédito: {{ $value }} compensación(es) dejaron una tarjeta excedida"
+          description: >-
+            Buscar en el log de payment-processing "left card ... over its limit" para ver la tarjeta y el monto.
+            Las compras siguientes de esa tarjeta se rechazan hasta que pague; puede requerir contacto con el cliente.
+
       - alert: PaymentOutboxStalled
         # Eventos pendientes de más de 5 min: el relay no logra publicar (Kafka caído o inaccesible)
         expr: max by (instance) (payment_outbox_stalled) > 0
