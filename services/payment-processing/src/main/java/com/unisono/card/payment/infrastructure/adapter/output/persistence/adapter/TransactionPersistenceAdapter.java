@@ -40,7 +40,9 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
             entity.setVersion(null);
         }
 
-        TransactionEntity savedEntity = jpaRepository.save(entity);
+        // Flush para que la versión (@Version) que vuelve al dominio sea la que quedó en la base: sin flush,
+        // Hibernate la incrementa recién al commit y el aggregate devuelto quedaría con la anterior
+        TransactionEntity savedEntity = jpaRepository.saveAndFlush(entity);
 
         return entityMapper.toDomain(savedEntity);
     }
