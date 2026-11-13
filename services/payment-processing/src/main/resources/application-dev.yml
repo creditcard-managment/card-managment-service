@@ -2,14 +2,14 @@
 
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/card_management_dev
+    url: jdbc:postgresql://localhost:5432/card_management_db
     username: postgres
     password: postgres
 
   jpa:
     show-sql: true
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate  # El esquema es compartido y lo maneja Flyway: nunca update
 
   kafka:
     bootstrap-servers: localhost:9092

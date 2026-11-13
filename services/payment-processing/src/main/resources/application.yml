@@ -2,11 +2,11 @@
 
 spring:
   application:
-    name: card-management-service
+    name: payment-processing
 
   # DataSource Configuration
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/card_management}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/card_management_db}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -33,12 +33,9 @@ spring:
         order_inserts: true
         order_updates: true
 
-  # Flyway Configuration
+  # El esquema lo crea Flyway en el repo card-management-database (igual que en el resto de los servicios)
   flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-    validate-on-migrate: true
+    enabled: false
 
   # Kafka Configuration
   kafka:
@@ -80,7 +77,7 @@ spring:
 
 # Server Configuration
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT:8085}
   servlet:
     context-path: /
   compression:
@@ -97,23 +94,21 @@ services:
   card-limits:
     url: ${CARD_LIMITS_SERVICE_URL:http://localhost:8082}
 
+  # Antifraude y autorizador no existen en el repo: los puertos no chocan con los de los otros servicios.
+  # Si no responden, el antifraude usa su cálculo local y el autorizador solo se llama con simulate: false
   fraud-detection:
-    url: ${FRAUD_DETECTION_SERVICE_URL:http://localhost:8081}
+    url: ${FRAUD_DETECTION_SERVICE_URL:http://localhost:8086}
 
   authorization:
-    url: ${AUTHORIZATION_SERVICE_URL:http://localhost:8082}
+    url: ${AUTHORIZATION_SERVICE_URL:http://localhost:8087}
 
 # Fraud Detection Configuration
 fraud:
   risk-threshold:
     high: 70
     medium: 40
-    low: 20
 
-  velocity:
-    max-transactions-per-hour: 10
-    max-transactions-per-day: 50
-
+  # Las reglas de velocidad las evalúa el servicio antifraude (GET /api/v1/fraud/velocity-check/{cardId})
   amount:
     suspicious-threshold: 5000.00
 

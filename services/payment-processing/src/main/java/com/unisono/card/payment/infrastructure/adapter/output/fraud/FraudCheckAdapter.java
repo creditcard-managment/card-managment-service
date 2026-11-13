@@ -23,7 +23,7 @@ public class FraudCheckAdapter implements FraudCheckPort {
 
     private final RestTemplate restTemplate;
 
-    @Value("${services.fraud-detection.url:http://localhost:8081}")
+    @Value("${services.fraud-detection.url:http://localhost:8086}")
     private String fraudDetectionServiceUrl;
 
     @Value("${fraud.risk-threshold.high:70}")
@@ -31,9 +31,6 @@ public class FraudCheckAdapter implements FraudCheckPort {
 
     @Value("${fraud.risk-threshold.medium:40}")
     private Integer mediumRiskThreshold;
-
-    @Value("${fraud.velocity.max-transactions-per-hour:10}")
-    private Integer maxTransactionsPerHour;
 
     @Value("${fraud.amount.suspicious-threshold:5000.00}")
     private BigDecimal suspiciousAmountThreshold;
