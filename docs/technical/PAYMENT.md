@@ -8,7 +8,7 @@
 | Clase principal | `com.unisono.card.payment.PaymentApplication` |
 | Puerto | `8085` (`SERVER_PORT`), el mismo que en docker-compose |
 | Base paths REST | `/api/v1/payments`, `/api/v1/refunds`, `/api/v1/reversals`, `/api/v1/settlements`, `/api/v1/transactions` |
-| Base de datos | PostgreSQL — tablas `transactions`, `transaction_items`, `transaction_receipts`, `payment_outbox_events`, `payment_credit_operations`; lee `merchants` y `payment_terminals` |
+| Base de datos | PostgreSQL — tablas `transactions`, `payment_outbox_events`, `payment_credit_operations`; lee `merchants` y `payment_terminals` |
 | Mensajería | Kafka (productor, vía outbox) — topics `payment.*` |
 | Dependencias internas | `card-shared` (`Money`, `CardId`, `ExpirationDate`, …), `card-events` (`DomainEvent`) |
 | Integraciones REST | card-data, card-limits, servicio antifraude y autorizador (ver §7) |
@@ -47,8 +47,7 @@ com.unisono.card.payment
 │   │                CardData, MerchantInfo, AuthorizationCode,
 │   │                TransactionStatus, TransactionType, PaymentMethod
 │   ├── event        PaymentInitiated, PaymentAuthorized, PaymentProcessed, PaymentDeclined,
-│   │                PaymentReversed, RefundInitiated, RefundProcessed, TransactionSettled,
-│   │                TransactionCompleted, FraudDetected
+│   │                PaymentReversed, RefundInitiated, RefundProcessed, TransactionSettled
 │   ├── exception    PaymentException y subclases (§5.4)
 │   ├── port.input   ProcessPayment, ProcessRefund, ReverseTransaction,
 │   │                SettleTransactions, QueryTransaction
@@ -140,6 +139,7 @@ stateDiagram-v2
 | `createPurchase(...)` | — | `PaymentInitiated` |
 | `createCashAdvance(...)` | — | `PaymentInitiated` (tipo `CASH_ADVANCE`) |
 | `createRefund(...)` | — | `RefundInitiated` |
+| `reconstitute(PersistedState)` | Estado completo (ids, tarjeta, comercio, tipo, monto, método, estado, fecha) | Ninguno: reconstruye una transacción guardada (lo usa `TransactionEntityMapper`, sin reflexión) |
 | `authorize(code, risk)` | No final y código aprobado (`"00"`) | `PaymentAuthorized` |
 | `assessRisk(score)` | No final. Guarda el score evaluado por el antifraude, también si después se rechaza | — |
 | `approve()` | Estado `AUTHORIZED` | `PaymentProcessed` |
@@ -147,7 +147,6 @@ stateDiagram-v2
 | `decline(reason, declinedCode)` | No final y código declinado (≠ `"00"`) | `PaymentDeclined` |
 | `reverse(reason)` | `AUTHORIZED` o `APPROVED`; solo débitos (`PURCHASE`, `CASH_ADVANCE`), validado en `TransactionValidationService` | `PaymentReversed` |
 | `settle()` | `APPROVED` | `TransactionSettled` |
-| `complete()` | No final | `TransactionCompleted` |
 
 ### 3.3 Value Objects y enums
 
@@ -159,6 +158,7 @@ stateDiagram-v2
 | `AuthorizationCode` | `approved(code)` → response `00`; `declined(rc)` → `DECLINED-xxxxxx`. |
 | `PaymentMethod` | `CHIP`, `CONTACTLESS`, `MOBILE_WALLET` (seguros); `SWIPE`, `ONLINE`, `MANUAL`. `ONLINE` y `MANUAL` requieren CVV; `ONLINE` es tarjeta no presente. |
 | `CardVerification` | PIN y CVV que ingresa el titular. Se verifican contra card-data y nunca se guardan. |
+| `PinBlock` | PIN cifrado por el terminal: bloque ISO 9564 formato 4 (32 hex) + id de la clave. payment-processing no lo puede descifrar: lo reenvía a card-data. `toString()` no muestra el bloque. |
 | `TransactionType` | `PURCHASE` (P), `REFUND` (R), `REVERSAL` (V), `CASH_ADVANCE` (A), `PRE_AUTHORIZATION` (PA), `CAPTURE` (C). |
 
 ### 3.4 Reglas de validación (`TransactionValidationService`)
@@ -239,6 +239,7 @@ Después sigue el mismo flujo que la compra, con `merchantName = "ATM Cash Advan
 
 - La transacción es **`CASH_ADVANCE`**, se valida con `POST /validate/cash-advance` y consume con `consume-cash-advance`, es decir, contra el tope de adelantos.
 - **Se verifica el PIN** contra card-data (`POST /cards/{id}/validate-pin`), después del estado de la tarjeta y antes de validar el crédito. Un PIN incorrecto declina la transacción con `55`. card-data cuenta el intento fallido: al tercero consecutivo bloquea la tarjeta, y los adelantos siguientes se declinan con `62`.
+- **El PIN nunca viaja en claro.** El terminal lo cifra en un **PIN block ISO 9564 formato 4** (AES) con una clave de cifrado de PIN (PEK) que comparte con card-data, y manda el bloque (`pinBlock`) con el id de la clave (`pinKeyId`). payment-processing reenvía el bloque tal cual: no tiene la clave. card-data lo descifra en memoria con la clave y el PAN de la tarjeta (el bloque está atado al PAN, así que no sirve para otra tarjeta) y lo compara con el hash. Si card-data no lo puede descifrar (clave desconocida, formato o tarjeta equivocados), responde 400 sin contar un intento, y el adelanto se declina con `55` (`Invalid PIN block`). Detalle en [DATA.md §4.3](DATA.md).
 
 ### 4.3 Reverso
 
@@ -354,7 +355,7 @@ Respuesta **201** `PaymentResponse`:
   "responseMessage": "Transaction approved successfully", "riskScore": 10,
   "merchantId": "MERCH-001", "merchantName": "Supermercado Centro",
   "transactionDate": "2026-11-02T10:15:30", "authorizedAt": "2026-11-02T10:15:30",
-  "approved": true, "declineReason": null, "receiptNumber": null
+  "approved": true, "declineReason": null
 }
 ```
 
@@ -373,7 +374,7 @@ Respuesta **402** `PaymentResponse` cuando se rechaza (la transacción queda gua
 
 ### 5.2 `POST /api/v1/payments/cash-advance`
 
-Campos: `cardId`, `cardNumberToken`, `lastFourDigits`, `expirationDate`, `amount` (0,01 – **5.000,00**), `currency`, `terminalId` (obligatorio), `atmLocation`, `country`, `pin` (4 dígitos, obligatorio; se verifica contra card-data, ver §4.2). Respuesta **201** `PaymentResponse`, o **402** si se rechaza.
+Campos: `cardId`, `cardNumberToken`, `lastFourDigits`, `expirationDate`, `amount` (0,01 – **5.000,00**), `currency`, `terminalId` (obligatorio), `atmLocation`, `country`, `pinBlock` (PIN block ISO 9564 formato 4, 32 caracteres hex, obligatorio) y `pinKeyId` (id de la clave con que lo cifró el terminal, obligatorio). El PIN se verifica contra card-data (§4.2). Ya no se acepta el PIN en claro (`pin`). Respuesta **201** `PaymentResponse`, o **402** si se rechaza.
 
 ### 5.3 Otros endpoints
 
@@ -464,7 +465,7 @@ En compras y adelantos, `InsufficientFundsException`, `FraudDetectedException`, 
 
 | Puerto | Destino | Llamadas | URL por defecto (`services.*`) |
 |---|---|---|---|
-| `CardValidationPort` | card-data | `GET /api/v1/cards/{cardId}` → `status`, `isBlocked`, `isExpired`; `POST /api/v1/cards/{cardId}/validate-pin` → `valid` (adelantos); `POST …/validate-cvv` → `valid` (`ONLINE`/`MANUAL`) | `CARD_DATA_SERVICE_URL` = `http://localhost:8081` |
+| `CardValidationPort` | card-data | `GET /api/v1/cards/{cardId}` → `status`, `isBlocked`, `isExpired`; `POST /api/v1/cards/{cardId}/validate-pin` con `{ pinBlock, pinKeyId }` → `valid` (adelantos); `POST …/validate-cvv` → `valid` (`ONLINE`/`MANUAL`) | `CARD_DATA_SERVICE_URL` = `http://localhost:8081` |
 | `CreditLimitPort` (`SagaCreditLimitPort` → `CreditLimitAdapter`) | card-limits | `POST /api/v1/credit-limits/validate/purchase` · `…/validate/cash-advance`; `GET …/card/{cardId}` (resuelve el `creditLimitId`); `POST …/{creditLimitId}/consume-purchase` · `…/consume-cash-advance` · `…/restore-credit` (reversos y devoluciones), con `operationId`; `POST …/{creditLimitId}/operations/{operationId}/cancel` (compensación, §4.7) | `CARD_LIMITS_SERVICE_URL` = `http://localhost:8082` |
 | `MerchantValidationPort` | Base compartida | `merchants` (existe y `status = 'ACTIVE'`) y `payment_terminals` (terminal `ACTIVE` → `merchant_id`), por JPA de solo lectura | — |
 | `FraudCheckPort` | Servicio antifraude | `/api/v1/fraud/*` | `FRAUD_DETECTION_SERVICE_URL` = `http://localhost:8086` (no existe en el repo; si no responde se usa el cálculo local) |
@@ -482,6 +483,7 @@ No hay un servicio de comercios: `merchants` y `payment_terminals` (V4) se carga
 | Tarjeta | Error de red o 5xx | 503 `SERVICE_UNAVAILABLE` |
 | PIN | `valid=false` | `DECLINED` `55` (402) |
 | PIN | 422 (tarjeta bloqueada) | `DECLINED` `62` (402) |
+| PIN | 400 (PIN block indescifrable o clave desconocida) | `DECLINED` `55` (402), `Invalid PIN block`; no suma un intento |
 | PIN | Error de red o 5xx | 503 `SERVICE_UNAVAILABLE` |
 | CVV | `valid=false` | `DECLINED` `N7` (402) |
 | CVV | 422 (tarjeta bloqueada) | `DECLINED` `62` (402) |
@@ -511,8 +513,6 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 | `RefundInitiated` | `payment.refund.initiated` | Al crear una devolución |
 | `RefundProcessed` | `payment.refund.processed` | `approveRefund()`: la devolución queda aprobada |
 | `TransactionSettled` | `payment.settlement.completed` | `settle()` |
-| `TransactionCompleted` | `payment.transaction.completed` | `complete()` (sin uso) |
-| `FraudDetected` | `payment.fraud.detected` | Nunca |
 
 **Productor:**
 
@@ -520,7 +520,7 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 - Key = **card id**: los eventos de una tarjeta (y de cada una de sus transacciones) quedan en la misma partición y en orden. Todos los eventos implementan `PaymentEvent` (`getCardId()`).
 - Payload: el JSON que serializa el `ObjectMapper` de Spring al guardar el evento. El relay lo envía tal cual.
 - `acks=all`, idempotente, 3 reintentos, `lz4`, `linger.ms=10`, sin type headers. Timeouts acotados (`request.timeout.ms=5000`, `delivery.timeout.ms=10000`, `max.block.ms=5000`) para que cada envío se resuelva antes de que el relay deje de esperar (`payment.outbox.send-timeout-ms=16000`).
-- `KafkaPaymentConfig` declara los 10 topics con **3 particiones** (`KAFKA_TOPIC_PARTITIONS`) y **replication factor 2** (`KAFKA_TOPIC_REPLICATION_FACTOR`). En docker-compose, con un solo broker, el factor es 1: si supera la cantidad de brokers, los topics no se crean al arrancar (`InvalidReplicationFactorException`).
+- `KafkaPaymentConfig` declara los 8 topics con **3 particiones** (`KAFKA_TOPIC_PARTITIONS`) y **replication factor 2** (`KAFKA_TOPIC_REPLICATION_FACTOR`). En docker-compose, con un solo broker, el factor es 1: si supera la cantidad de brokers, los topics no se crean al arrancar (`InvalidReplicationFactorException`).
 - Nadie consume todavía estos topics.
 
 ---
@@ -547,8 +547,7 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 
 **Tablas asociadas:**
 
-- **`transaction_items`:** detalle de ítems (descripción, cantidad, precio unitario, total).
-- **`transaction_receipts`:** comprobantes (`receipt_number` único `RCP-…`, tipo `DIGITAL|PRINTED|EMAIL|SMS`, `receipt_data` en **jsonb** vía hypersistence-utils, estado de entrega).
+- **`transaction_items`** (V6) y **`transaction_receipts`** (V7): ítems y comprobantes. Existen en la base, pero el servicio no las mapea ni las usa.
 
 **De solo lectura** (V4, las administra el módulo de comercios): `merchants` (`id`, `legal_name`, `trade_name`, `status`) y `payment_terminals` (`id`, `merchant_id`, `terminal_type`, `status`).
 
@@ -557,7 +556,7 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 - **`payment_outbox_events`:** igual que `outbox_events` de card-data (`event_id` único, `aggregate_id` = card id, `topic`, `event_type`, `payload` JSON, `created_at`, `published_at`, `failed_at`, `attempts`, `last_error`), con índices parciales de pendientes, publicados y fallidos. Para reintentar un fallido: `UPDATE payment_outbox_events SET failed_at = NULL WHERE id = …`.
 - **`payment_credit_operations`:** `operation_id` (PK, el que recibe card-limits), `transaction_id` (sin FK: la transacción puede no haberse guardado nunca), `card_id`, `operation_type` (`CONSUME_PURCHASE`, `CONSUME_CASH_ADVANCE`, `RESTORE`), `amount`, `currency`, `status` (`PENDING`, `CONFIRMED`, `REJECTED`, `COMPENSATED`), `attempts`, `last_error`, `created_at`, `updated_at`. Índice parcial de las `PENDING`. Una `PENDING` con muchos `attempts` indica que card-limits no responde a las cancelaciones.
 
-El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tiene consultas de estadísticas, sospechosas, duplicados y volumen por comercio, que tampoco se exponen.
+`JpaTransactionRepository` solo tiene las consultas que usa el servicio.
 
 ### 9.2 Configuración
 
@@ -581,6 +580,10 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 `DatabaseConfig` define `paymentDataSource` (Hikari, pool de 20, `autoCommit=false`), `paymentEntityManagerFactory` y `paymentTransactionManager` propios.
 
+`TransactionPersistenceAdapter.save` hace `saveAndFlush`: así el aggregate que devuelve trae la versión (`@Version`) que quedó en la base, y los errores de constraints aparecen en el `save()` y no recién en el commit.
+
+**Tests de persistencia:** extienden `PostgresPersistenceTest`, que levanta un PostgreSQL 16 con Testcontainers y usa el `DatabaseConfig` real con `ddl-auto: create`. Corren con `mvn test`; sin Docker se saltean.
+
 ### 9.3 Docker
 
 `services/payment-processing/Dockerfile` (multi-stage) y servicio `payment-processing-service` en compose (sin perfil: toda la configuración está en `application.yml`; los perfiles opcionales son `dev` y `prod`): puerto `8085`, `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`, `depends_on: kafka`, `CARD_DATA_SERVICE_URL=http://card-data-service:8081` y `CARD_LIMITS_SERVICE_URL=http://card-limits-service:8082`. Las URLs de antifraude y autorizador quedan en sus defaults de `localhost`.
@@ -599,8 +602,5 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 4. **Compensación sin revisión de fondos:** deshacer una restauración vuelve a consumir lo restaurado sin validar límites, así que el disponible puede quedar por debajo de lo que permitiría una compra nueva. Si la compensación ocurre otro día (u otro mes), el cupo diario (o mensual) ya se reseteó y no se vuelve a tocar.
 5. **Compensación sin alertas:** una operación que no se puede cancelar (card-limits caído) queda `PENDING` y se reintenta sin límite. Solo se ve en el log y en `payment_credit_operations.attempts`; no hay métrica ni alerta. Lo mismo pasa con los eventos fallidos del outbox.
-6. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
-7. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
-8. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
-9. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
-10. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. También de `TransactionReversalService`, `PreAuthorizationExpiryService`, la saga (`SagaCreditLimitPort`, compensador y reconciliador) y el outbox (publisher, relay y limpieza). Faltan los de controllers, persistencia (incluido el mapper por reflexión, el lock y las consultas nuevas) y `RefundApplicationService`.
+6. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización). El PIN de los adelantos ya viaja cifrado (PIN block), pero la clave de cifrado de PIN es una sola por configuración, sin HSM ni DUKPT (una clave por transacción). Entre servicios no hay TLS ni autenticación.
+7. **Sin tests de punta a punta:** hay tests unitarios de dominio, servicios de aplicación (incluido `RefundApplicationService`), adapters, saga, outbox y los cinco controllers (MockMvc con los mappers y el `GlobalExceptionHandler` reales). La persistencia se prueba contra PostgreSQL con Testcontainers (`TransactionPersistenceTest`, `OutboxAndCreditOperationQueriesTest`): mapeo, `@Version`, consultas, el lock de `findByIdForUpdate` y los `FOR UPDATE SKIP LOCKED` del relay y del reconciliador. Ese esquema lo genera Hibernate, no las migraciones de `card-management-database`. Falta un test con el contexto completo de Spring, Kafka, card-data y card-limits.

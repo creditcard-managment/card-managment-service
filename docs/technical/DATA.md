@@ -282,10 +282,14 @@ Reciben DTOs validados con Bean Validation (`UpdateCardStatusRequest`, `UpdateAc
 #### `POST /{cardId}/validate-pin`
 
 ```json
-{ "pin": "1234" }
+{ "pinBlock": "22A82BAE1D1C1E16F1502C988540787E", "pinKeyId": "pek-v1" }
 ```
 
-Respuesta **200** `{ "valid": true | false }`. Devuelve `false` también si la tarjeta no tiene PIN configurado. PIN de exactamente 4 dígitos.
+Respuesta **200** `{ "valid": true | false }`. Devuelve `false` también si la tarjeta no tiene PIN configurado.
+
+- **`pinBlock`:** PIN cifrado por el terminal en un PIN block **ISO 9564 formato 4** (AES), 32 caracteres hexadecimales. `pinKeyId` es el id de la clave de cifrado de PIN (PEK) que usó el terminal (`pin-encryption.keys`). card-data lo descifra en memoria con esa clave y el PAN de la tarjeta, y compara el PIN contra el hash BCrypt. El PIN nunca se guarda ni se loguea.
+- Si el bloque no se puede descifrar (clave desconocida, formato inválido, o bloque cifrado para otra tarjeta o con otra clave) → **400**, **sin** contar un intento fallido: no se llegó a comparar ningún PIN.
+- **`pin`** (en claro, 4 dígitos): se acepta todavía solo para la activación desde card-lifecycle, que no cifra. Se envía `pinBlock` + `pinKeyId` **o** `pin`, nunca ambos (400 si no).
 
 - Un PIN incorrecto suma un intento fallido; al tercero consecutivo la tarjeta pasa a `BLOCKED`.
 - Un PIN correcto reinicia el contador.
@@ -502,12 +506,21 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 | Últimos 4 dígitos | En claro | `CardEntityMapper` |
 | CVV | Cifrado AES | `CardRepositoryAdapter` |
 | PIN | Hash BCrypt (`BCryptHashingService`); el PIN en claro solo vive en memoria y está excluido de `toString()` | `CardEntityMapper` / `PINManagementService` |
+| PIN en tránsito (`validate-pin`) | PIN block ISO 9564 formato 4, descifrado en memoria (`Iso9564Format4PinBlock` de `card-shared`) con la clave `pin-encryption.keys.<pinKeyId>` y el PAN | `PinBlockAdapter` vía `PinBlockPort` |
 
 - **Llavero de claves versionadas** (ver `SHARED.md` §4.1). El PAN y el CVV se guardan como `k1:<Base64>`, donde el prefijo indica con qué clave se cifró.
   - Variables: `ENCRYPTION_ACTIVE_KEY_ID` (por defecto `k1`) y `ENCRYPTION_KEY_K1` (Base64 de 32 bytes, `openssl rand -base64 32`). Los defaults son de desarrollo; **deben definirse en producción**.
   - Si la configuración es inválida (falta la clave activa, la clave no es Base64 o no mide 32 bytes), el servicio no arranca.
 - **Rotación:** agregar `encryption.keys.k2`, apuntar `active-key-id` a `k2` y conservar `k1` para leer lo ya guardado. Cada vez que se guarda una tarjeta, su PAN y su CVV se vuelven a cifrar con la clave activa.
 - **Datos anteriores al llavero** (sin prefijo): se descifran con `encryption.legacy-secret-key` (`ENCRYPTION_KEY`, la clave de 32 caracteres de antes) y pasan a la clave activa al volver a guardarse.
+- **Claves de cifrado de PIN (PEK):** `pin-encryption.keys.<id>`, Base64 de 16, 24 o 32 bytes (`openssl rand -base64 16`). Es la clave que comparte card-data con los terminales; por defecto `pek-v1` (`PIN_ENCRYPTION_KEY_V1`) con una clave de desarrollo, que **debe definirse en producción** (idealmente en un HSM). Si una clave no es válida, el servicio no arranca. Para rotar: agregar `pek-v2`, pasar los terminales a esa clave y después quitar `pek-v1`.
+- **Generar un PIN block para probar** (con la clave de desarrollo y el PAN de la tarjeta):
+  ```bash
+  mvn -q -pl services/card-shared install -DskipTests
+  jshell --class-path services/card-shared/target/card-shared-1.0.0-SNAPSHOT.jar
+  jshell> com.unisono.card.shared.infrastructure.security.Iso9564Format4PinBlock.encrypt("4821", "<PAN>",
+     ...>     java.util.Base64.getDecoder().decode("+ep2jpFqFwl6KCzkw+qerg=="))
+  ```
 - Las respuestas REST solo devuelven el número enmascarado.
 - Los endpoints no tienen autenticación ni autorización (no hay Spring Security en el módulo).
 
@@ -574,6 +587,7 @@ Cambiar el PIN no publica ningún evento.
 | `encryption.active-key-id` | `${ENCRYPTION_ACTIVE_KEY_ID:k1}` |
 | `encryption.keys.k1` | `${ENCRYPTION_KEY_K1}`, por defecto una clave de desarrollo (Base64 de 32 bytes) |
 | `encryption.legacy-secret-key` | `${ENCRYPTION_KEY}`, clave anterior (32 caracteres), solo para leer datos sin prefijo |
+| `pin-encryption.keys.pek-v1` | `${PIN_ENCRYPTION_KEY_V1}`, por defecto una clave de desarrollo (Base64 de 16 bytes). Descifra los PIN blocks de `validate-pin` |
 | `card.data.outbox.poll-interval-ms` | `1000` (frecuencia del relay) |
 | `card.data.outbox.batch-size` | `50` (eventos por pasada) |
 | `card.data.outbox.send-timeout-ms` | `15000` (debe superar `delivery.timeout.ms` + `max.block.ms`) |
@@ -606,3 +620,4 @@ Comportamientos actuales del código que conviene tener presentes:
 
 1. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay, pero ninguno de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`. `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
 2. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.
+3. **PIN en claro en tránsito fuera de los adelantos.** La emisión (`PUT /card-data`), el cambio de PIN (`reset-pin`) y la activación desde card-lifecycle (`validate-pin` con `pin`) siguen recibiendo el PIN en claro. Solo los adelantos (payment-processing) usan PIN block.

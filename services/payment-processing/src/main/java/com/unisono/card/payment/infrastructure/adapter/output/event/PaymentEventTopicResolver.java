@@ -37,12 +37,6 @@ public class PaymentEventTopicResolver {
     @Value("${spring.kafka.topics.transaction.settled:payment.settlement.completed}")
     private String transactionSettledTopic;
 
-    @Value("${spring.kafka.topics.transaction.completed:payment.transaction.completed}")
-    private String transactionCompletedTopic;
-
-    @Value("${spring.kafka.topics.fraud.detected:payment.fraud.detected}")
-    private String fraudDetectedTopic;
-
     @Value("${spring.kafka.topics.payment.default:payment.events}")
     private String defaultTopic;
 
@@ -68,10 +62,6 @@ public class PaymentEventTopicResolver {
             topic = refundProcessedTopic;
         } else if (event instanceof TransactionSettled) {
             topic = transactionSettledTopic;
-        } else if (event instanceof TransactionCompleted) {
-            topic = transactionCompletedTopic;
-        } else if (event instanceof FraudDetected) {
-            topic = fraudDetectedTopic;
         } else {
             log.warn("Unknown event type: {}, using default topic", event.getEventType());
             topic = defaultTopic;

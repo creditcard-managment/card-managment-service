@@ -42,6 +42,13 @@ public class CardValidationException extends PaymentException {
         return new CardValidationException(cardId, "CVV", "CVV is required for card-not-present payments");
     }
 
+    /**
+     * card-data could not decrypt the PIN block (unknown key, wrong format or another card's block)
+     */
+    public static CardValidationException invalidPinBlock(CardId cardId) {
+        return new CardValidationException(cardId, "PIN", "Invalid PIN block");
+    }
+
     public static CardValidationException invalidPin(CardId cardId) {
         return new CardValidationException(cardId, "PIN", "Incorrect PIN");
     }

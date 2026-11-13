@@ -40,7 +40,9 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
             entity.setVersion(null);
         }
 
-        TransactionEntity savedEntity = jpaRepository.save(entity);
+        // Flush para que la versión (@Version) que vuelve al dominio sea la que quedó en la base: sin flush,
+        // Hibernate la incrementa recién al commit y el aggregate devuelto quedaría con la anterior
+        TransactionEntity savedEntity = jpaRepository.saveAndFlush(entity);
 
         return entityMapper.toDomain(savedEntity);
     }
@@ -115,16 +117,6 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     }
 
     @Override
-    public List<Transaction> findByStatus(TransactionStatus status) {
-        log.debug("Finding transactions with status: {}", status);
-
-        return jpaRepository.findByTransactionStatusOrderByTransactionDateDesc(status)
-                .stream()
-                .map(entityMapper::toDomain)
-                .collect(Collectors.toList());
-    }
-
-    @Override
     public List<Transaction> findPendingSettlement() {
         log.debug("Finding transactions pending settlement");
 
@@ -132,29 +124,5 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
                 .stream()
                 .map(entityMapper::toDomain)
                 .collect(Collectors.toList());
-    }
-
-    @Override
-    public List<Transaction> findCreatedBefore(LocalDateTime date) {
-        log.debug("Finding transactions created before: {}", date);
-
-        return jpaRepository.findCreatedBefore(date)
-                .stream()
-                .map(entityMapper::toDomain)
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public boolean existsById(TransactionId transactionId) {
-        log.debug("Checking if transaction exists: {}", transactionId);
-
-        return jpaRepository.existsByTransactionId(transactionId.getValue());
-    }
-
-    @Override
-    public void delete(TransactionId transactionId) {
-        log.debug("Deleting transaction: {}", transactionId);
-
-        jpaRepository.deleteById(transactionId.getValue());
     }
 }

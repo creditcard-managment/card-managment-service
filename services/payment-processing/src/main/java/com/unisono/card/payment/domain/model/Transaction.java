@@ -1,5 +1,7 @@
 package com.unisono.card.payment.domain.model;
 
+import lombok.Builder;
+import java.util.Objects;
 import com.unisono.card.events.domain.DomainEvent; // ✅ Importar DomainEvent
 import com.unisono.card.payment.domain.event.*;
 import com.unisono.card.payment.domain.exception.InvalidTransactionException;
@@ -52,6 +54,12 @@ public class Transaction {
     private Transaction(TransactionId transactionId, CardId cardId, CardData cardData,
                         MerchantInfo merchantInfo, TransactionType type, TransactionAmount amount,
                         PaymentMethod paymentMethod) {
+        this(transactionId, cardId, cardData, merchantInfo, type, amount, paymentMethod, LocalDateTime.now());
+    }
+
+    private Transaction(TransactionId transactionId, CardId cardId, CardData cardData,
+                        MerchantInfo merchantInfo, TransactionType type, TransactionAmount amount,
+                        PaymentMethod paymentMethod, LocalDateTime transactionDate) {
         this.transactionId = transactionId;
         this.cardId = cardId;
         this.cardData = cardData;
@@ -60,8 +68,62 @@ public class Transaction {
         this.amount = amount;
         this.paymentMethod = paymentMethod;
         this.status = TransactionStatus.PENDING;
-        this.transactionDate = LocalDateTime.now();
+        this.transactionDate = transactionDate;
         this.version = 0;
+    }
+
+    /**
+     * Rebuilds a stored transaction with its saved state. Unlike the {@code create*} factories it does not
+     * apply business rules nor emit domain events: the transaction already happened.
+     */
+    public static Transaction reconstitute(PersistedState state) {
+        Objects.requireNonNull(state, "state");
+        Transaction transaction = new Transaction(
+                Objects.requireNonNull(state.transactionId(), "transactionId"),
+                Objects.requireNonNull(state.cardId(), "cardId"),
+                Objects.requireNonNull(state.cardData(), "cardData"),
+                Objects.requireNonNull(state.merchantInfo(), "merchantInfo"),
+                Objects.requireNonNull(state.type(), "type"),
+                Objects.requireNonNull(state.amount(), "amount"),
+                Objects.requireNonNull(state.paymentMethod(), "paymentMethod"),
+                Objects.requireNonNull(state.transactionDate(), "transactionDate")
+        );
+        transaction.status = Objects.requireNonNull(state.status(), "status");
+        transaction.authorizationCode = state.authorizationCode();
+        transaction.riskScore = state.riskScore();
+        transaction.declineReason = state.declineReason();
+        transaction.terminalId = state.terminalId();
+        transaction.posEntryMode = state.posEntryMode();
+        transaction.settlementDate = state.settlementDate();
+        transaction.originalTransactionId = state.originalTransactionId();
+        transaction.version = state.version();
+        return transaction;
+    }
+
+    /**
+     * Stored state of a transaction, used by {@link #reconstitute(PersistedState)}.
+     * {@code originalTransactionId} is only set for refunds (and may be missing in refunds stored before V11).
+     */
+    @Builder
+    public record PersistedState(
+            TransactionId transactionId,
+            CardId cardId,
+            CardData cardData,
+            MerchantInfo merchantInfo,
+            TransactionType type,
+            TransactionAmount amount,
+            PaymentMethod paymentMethod,
+            TransactionStatus status,
+            AuthorizationCode authorizationCode,
+            Integer riskScore,
+            String declineReason,
+            String terminalId,
+            String posEntryMode,
+            LocalDateTime transactionDate,
+            LocalDateTime settlementDate,
+            TransactionId originalTransactionId,
+            int version
+    ) {
     }
 
     /**
@@ -277,20 +339,6 @@ public class Transaction {
                 this.cardId,
                 this.amount,
                 this.settlementDate
-        ));
-    }
-
-    /**
-     * Mark transaction as completed
-     */
-    public void complete() {
-        validateNotFinal();
-
-        addDomainEvent(new TransactionCompleted(
-                this.transactionId,
-                this.cardId,
-                this.status,
-                LocalDateTime.now()
         ));
     }
 

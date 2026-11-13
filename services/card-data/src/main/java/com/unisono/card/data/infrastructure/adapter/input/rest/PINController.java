@@ -39,10 +39,12 @@ public class PINController {
      * Validar PIN
      */
     @PostMapping("/{cardId}/validate-pin")
-    @Operation(summary = "Validar PIN", description = "Valida si el PIN proporcionado es correcto")
+    @Operation(summary = "Validar PIN", description = "Valida el PIN, cifrado en un PIN block ISO 9564 formato 4 "
+            + "(pinBlock + pinKeyId). Un PIN incorrecto suma un intento fallido; un bloque que no se puede "
+            + "descifrar responde 400 sin sumarlo")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Validación exitosa"),
-            @ApiResponse(responseCode = "400", description = "PIN inválido"),
+            @ApiResponse(responseCode = "400", description = "Request inválido, PIN block indescifrable o clave de PIN desconocida"),
             @ApiResponse(responseCode = "404", description = "Tarjeta no encontrada")
     })
     public ResponseEntity<Map<String, Boolean>> validatePIN(
@@ -53,10 +55,9 @@ public class PINController {
     ) {
         log.debug("Validating PIN for card: {}", cardId);
 
-        ValidatePINUseCase.ValidatePINCommand command = new ValidatePINUseCase.ValidatePINCommand(
-                CardId.of(cardId),
-                request.getPin()
-        );
+        ValidatePINUseCase.ValidatePINCommand command = request.getPinBlock() != null && !request.getPinBlock().isBlank()
+                ? ValidatePINUseCase.ValidatePINCommand.ofPinBlock(CardId.of(cardId), request.getPinBlock(), request.getPinKeyId())
+                : new ValidatePINUseCase.ValidatePINCommand(CardId.of(cardId), request.getPin());
 
         boolean isValid = validatePINUseCase.execute(command);
 

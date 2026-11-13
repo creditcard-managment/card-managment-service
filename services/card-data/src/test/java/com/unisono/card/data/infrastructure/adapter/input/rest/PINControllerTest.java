@@ -107,13 +107,53 @@ class PINControllerTest {
         }
 
         @ParameterizedTest
-        @ValueSource(strings = {"{\"pin\":\"\"}", "{\"pin\":\"123\"}", "{\"pin\":\"12345\"}", "{\"pin\":\"12a4\"}", "{}"})
-        void shouldReturn400WhenPinIsMissingOrMalformed(String body) throws Exception {
+        @ValueSource(strings = {"{\"pin\":\"123\"}", "{\"pin\":\"12345\"}", "{\"pin\":\"12a4\"}"})
+        void shouldReturn400WhenPinIsMalformed(String body) throws Exception {
             validatePin(CARD_ID, body)
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.fieldErrors.pin").exists());
 
             verifyNoInteractions(validatePINUseCase);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+                "{}",
+                "{\"pin\":\"\"}",
+                "{\"pinBlock\":\"00112233445566778899AABBCCDDEEFF\"}",
+                "{\"pinBlock\":\"00112233445566778899AABBCCDDEEFF\",\"pinKeyId\":\"pek-v1\",\"pin\":\"4821\"}",
+                "{\"pin\":\"4821\",\"pinKeyId\":\"pek-v1\"}"
+        })
+        void shouldReturn400UnlessItSendsEitherAPinBlockWithItsKeyOrAPin(String body) throws Exception {
+            validatePin(CARD_ID, body)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.fieldErrors.pinOrPinBlock").exists());
+
+            verifyNoInteractions(validatePINUseCase);
+        }
+
+        @Test
+        void shouldReturn400WhenPinBlockIsNotHex() throws Exception {
+            validatePin(CARD_ID, "{\"pinBlock\":\"" + "Z".repeat(32) + "\",\"pinKeyId\":\"pek-v1\"}")
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.fieldErrors.pinBlock").exists());
+
+            verifyNoInteractions(validatePINUseCase);
+        }
+
+        @Test
+        void shouldPassThePinBlockAndItsKeyToTheUseCase() throws Exception {
+            when(validatePINUseCase.execute(any())).thenReturn(true);
+
+            validatePin(CARD_ID, "{\"pinBlock\":\"00112233445566778899aabbccddeeff\",\"pinKeyId\":\"pek-v1\"}")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.valid").value(true));
+
+            ArgumentCaptor<ValidatePINCommand> command = ArgumentCaptor.forClass(ValidatePINCommand.class);
+            verify(validatePINUseCase).execute(command.capture());
+            assertThat(command.getValue().pinBlock()).isEqualTo("00112233445566778899aabbccddeeff");
+            assertThat(command.getValue().pinKeyId()).isEqualTo("pek-v1");
+            assertThat(command.getValue().plainPin()).isNull();
         }
 
         @Test

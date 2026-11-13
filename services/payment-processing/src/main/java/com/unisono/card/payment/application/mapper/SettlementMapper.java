@@ -1,5 +1,6 @@
 package com.unisono.card.payment.application.mapper;
 
+import com.unisono.card.shared.domain.valueobject.Money;
 import com.unisono.card.payment.application.dto.response.SettlementResponse;
 import com.unisono.card.payment.domain.model.Transaction;
 import com.unisono.card.payment.domain.model.TransactionId;
@@ -38,8 +39,9 @@ public interface SettlementMapper {
                 .map(t -> t.getAmount().getEffectiveAmount().getAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        // Sin transacciones, la moneda del sistema (solo se opera en ARS)
         String currency = transactions.isEmpty()
-                ? "USD"
+                ? Money.zero().getCurrencyCode()
                 : transactions.get(0).getAmount().getEffectiveAmount().getCurrency().toString();
 
         List<String> settledIds = settled.stream()

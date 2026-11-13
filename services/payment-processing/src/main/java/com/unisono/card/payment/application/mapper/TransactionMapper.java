@@ -1,5 +1,6 @@
 package com.unisono.card.payment.application.mapper;
 
+import com.unisono.card.shared.domain.valueobject.Money;
 import com.unisono.card.payment.application.dto.response.TransactionResponse;
 import com.unisono.card.payment.application.dto.response.TransactionSummaryResponse;
 import com.unisono.card.payment.domain.model.Transaction;
@@ -89,7 +90,7 @@ public interface TransactionMapper {
                     .reversedCount(0L)
                     .pendingCount(0L)
                     .totalAmount(BigDecimal.ZERO)
-                    .currency("USD")
+                    .currency(Money.zero().getCurrencyCode()) // moneda del sistema (ARS)
                     .build();
         }
 

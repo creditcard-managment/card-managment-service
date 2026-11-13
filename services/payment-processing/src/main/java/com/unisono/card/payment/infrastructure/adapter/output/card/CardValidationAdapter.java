@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.adapter.output.card;
 
+import com.unisono.card.payment.domain.model.PinBlock;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.unisono.card.payment.domain.exception.CardValidationException;
 import com.unisono.card.payment.domain.exception.ExternalServiceException;
@@ -60,8 +61,9 @@ public class CardValidationAdapter implements CardValidationPort {
     }
 
     @Override
-    public boolean validatePin(CardId cardId, String pin) {
-        return verify(cardId, "validate-pin", Map.of("pin", pin), "PIN");
+    public boolean validatePin(CardId cardId, PinBlock pin) {
+        // El bloque viaja tal cual: solo card-data tiene la clave y el PAN para descifrarlo
+        return verify(cardId, "validate-pin", Map.of("pinBlock", pin.block(), "pinKeyId", pin.keyId()), "PIN");
     }
 
     @Override
@@ -92,6 +94,15 @@ public class CardValidationAdapter implements CardValidationPort {
         } catch (HttpClientErrorException.UnprocessableEntity ex) {
             // card-data rechaza la validación sobre una tarjeta bloqueada
             throw CardValidationException.blocked(cardId);
+        } catch (HttpClientErrorException.BadRequest ex) {
+            if ("PIN".equals(what)) {
+                // El PIN block no se pudo descifrar (clave desconocida, formato o tarjeta equivocados).
+                // card-data no cuenta un intento: no llegó a comparar ningún PIN
+                log.warn("card-data could not decrypt the PIN block for card {}", cardId);
+                throw CardValidationException.invalidPinBlock(cardId);
+            }
+            log.error("Error validating {} for {}: {}", what, cardId, ex.getMessage());
+            throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);
         } catch (RestClientException ex) {
             log.error("Error validating {} for {}: {}", what, cardId, ex.getMessage());
             throw new ExternalServiceException(SERVICE, ex.getMessage(), ex);

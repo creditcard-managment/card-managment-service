@@ -48,7 +48,15 @@ public class ProcessCashAdvanceCommand {
     @Pattern(regexp = "[A-Z]{2}", message = "Country code must be ISO 3166-1 alpha-2")
     private String country;
 
-    @NotBlank(message = "PIN is required for cash advance")
-    @Pattern(regexp = "\\d{4}", message = "PIN must be 4 digits")
-    private String pin; // Se verifica contra card-data (POST /cards/{id}/validate-pin)
+    /**
+     * PIN cifrado por el terminal: PIN block ISO 9564 formato 4 (AES). Se reenvía tal cual a card-data
+     * (POST /cards/{id}/validate-pin), que lo descifra y lo verifica. Nunca viaja ni se guarda en claro.
+     */
+    @NotBlank(message = "PIN block is required for cash advance")
+    @Pattern(regexp = "[0-9A-Fa-f]{32}", message = "PIN block must be 32 hexadecimal characters (ISO 9564 format 4)")
+    private String pinBlock;
+
+    @NotBlank(message = "PIN key id is required for cash advance")
+    @Size(max = 32, message = "PIN key id must be at most 32 characters")
+    private String pinKeyId;
 }

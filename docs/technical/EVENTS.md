@@ -314,8 +314,6 @@ docker exec -it card-management-kafka kafka-console-consumer \
 | `RefundInitiated` | `payment.refund.initiated` | `refundTransactionId`, `originalTransactionId`, `cardId`, `amount`, `initiatedAt` | Sí |
 | `RefundProcessed` | `payment.refund.processed` | `refundTransactionId`, `originalTransactionId`, `cardId`, `amount`, `processedAt` | Sí (`approveRefund()`) |
 | `TransactionSettled` | `payment.settlement.completed` | `transactionId`, `cardId`, `amount`, `settledAt` | Sí |
-| `TransactionCompleted` | `payment.transaction.completed` | `transactionId`, `cardId`, `finalStatus`, `completedAt` | **No** (`complete()` no se usa) |
-| `FraudDetected` | `payment.fraud.detected` | `transactionId`, `cardId`, `riskScore`, `fraudReason`, `detectionMethod`, `detectedAt` | **No** |
 | *(desconocido)* | `payment.events` | — | Topic por defecto de `PaymentEventTopicResolver` |
 
 Características propias:
@@ -383,7 +381,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 2. **Sin evento de vencimiento.** Pasar a `EXPIRED` no publica nada: no hay `card.expired` en el catálogo.
 3. **DLQ sin reproceso automático** (ver §5.3): reinyectar mensajes es manual y un corte largo de la base puede llenarla. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
 4. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
-5. **Eventos de pago sin consumidores**, y `FraudDetected` y `TransactionCompleted` nunca se emiten.
+5. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclined` (código `59`); no hay un evento de fraude propio.
 6. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
 7. **Replication factor 2 con un solo broker:** `KafkaPaymentConfig` declara los topics de pago con `replicas=2`, que el broker único del compose no puede satisfacer. La creación por `KafkaAdmin` falla; los topics terminan creándose por auto-creación con la configuración por defecto.
 8. **Convenciones mezcladas:** `KafkaTopics.TRANSACTION_*` (`transaction.authorized`) no coincide con los topics que realmente usa `payment-processing` (`payment.processing.authorized`); los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados.
