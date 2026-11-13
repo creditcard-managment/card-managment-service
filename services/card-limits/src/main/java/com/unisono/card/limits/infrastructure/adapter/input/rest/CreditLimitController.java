@@ -3,6 +3,7 @@ package com.unisono.card.limits.infrastructure.adapter.input.rest;
 import com.unisono.card.limits.application.dto.request.*;
 import com.unisono.card.limits.application.dto.response.CreditInfoResponse;
 import com.unisono.card.limits.application.dto.response.CreditLimitHistoryResponse;
+import com.unisono.card.limits.application.dto.response.CancelOperationResponse;
 import com.unisono.card.limits.application.dto.response.CreditLimitResponse;
 import com.unisono.card.limits.application.mapper.CreditLimitDtoMapper;
 import com.unisono.card.limits.domain.model.CreditLimit;
@@ -407,6 +408,36 @@ public class CreditLimitController {
                 mapper.toRestoreCommand(creditLimitId, request));
 
         return ResponseEntity.ok(mapper.toResponse(creditLimit));
+    }
+
+    @PostMapping("/{creditLimitId}/operations/{operationId}/cancel")
+    @Operation(summary = "Cancelar una operación de crédito",
+            description = "Deshace exactamente un consumo o una restauración enviados con operationId. "
+                    + "Si la operación todavía no llegó, la anula y se rechaza cuando llegue. Es idempotente")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Operación cancelada, anulada o ya cancelada"),
+            @ApiResponse(responseCode = "404", description = "Límite no encontrado"),
+            @ApiResponse(responseCode = "422", description = "La operación pertenece a otro límite")
+    })
+    public ResponseEntity<CancelOperationResponse> cancelOperation(
+            @Parameter(description = "ID del límite de crédito")
+            @PathVariable String creditLimitId,
+
+            @Parameter(description = "Id de la operación")
+            @PathVariable String operationId
+    ) {
+        log.info("Cancelling credit operation {} of {}", operationId, creditLimitId);
+
+        RecalculateAvailableCreditUseCase.CancelOperationResult result = recalculateAvailableCreditUseCase.cancelOperation(
+                new RecalculateAvailableCreditUseCase.CancelOperationCommand(creditLimitId, operationId));
+
+        CreditLimit creditLimit = result.creditLimit();
+        return ResponseEntity.ok(CancelOperationResponse.builder()
+                .operationId(operationId)
+                .outcome(result.outcome().name())
+                .availableCredit(creditLimit.getAvailableCredit().getAmount().getAmount())
+                .currency(creditLimit.getAvailableCredit().getAmount().getCurrencyCode())
+                .build());
     }
 
     // ========================================

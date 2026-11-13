@@ -109,7 +109,7 @@ class PaymentDomainServiceTest {
             assertThat(transaction.getStatus()).isEqualTo(TransactionStatus.APPROVED);
             assertThat(transaction.getRiskScore()).isEqualTo(10);
             verify(creditLimitPort).checkCredit(CARD_ID, AMOUNT, TransactionType.PURCHASE);
-            verify(creditLimitPort).consumeCredit(eq(CARD_ID), eq(AMOUNT), eq(TransactionType.PURCHASE),
+            verify(creditLimitPort).consumeCredit(any(), eq(CARD_ID), eq(AMOUNT), eq(TransactionType.PURCHASE),
                     contains("Supermercado"));
         }
 
@@ -120,7 +120,7 @@ class PaymentDomainServiceTest {
             assertThat(transaction.getType()).isEqualTo(TransactionType.CASH_ADVANCE);
             assertThat(transaction.getStatus()).isEqualTo(TransactionStatus.APPROVED);
             verify(creditLimitPort).checkCredit(CARD_ID, AMOUNT, TransactionType.CASH_ADVANCE);
-            verify(creditLimitPort).consumeCredit(eq(CARD_ID), eq(AMOUNT), eq(TransactionType.CASH_ADVANCE), anyString());
+            verify(creditLimitPort).consumeCredit(any(), eq(CARD_ID), eq(AMOUNT), eq(TransactionType.CASH_ADVANCE), anyString());
         }
 
         @Test
@@ -129,7 +129,7 @@ class PaymentDomainServiceTest {
 
             InOrder order = inOrder(authorizationPort, creditLimitPort);
             order.verify(authorizationPort).requestAuthorization(any());
-            order.verify(creditLimitPort).consumeCredit(any(), any(), any(), anyString());
+            order.verify(creditLimitPort).consumeCredit(any(), any(), any(), any(), anyString());
         }
 
         @Test
@@ -140,7 +140,7 @@ class PaymentDomainServiceTest {
 
             assertDeclined(transaction, "61");
             assertThat(transaction.getDeclineReason()).contains("61");
-            verify(creditLimitPort, never()).consumeCredit(any(), any(), any(), anyString());
+            verify(creditLimitPort, never()).consumeCredit(any(), any(), any(), any(), anyString());
         }
 
         @Test
@@ -205,7 +205,7 @@ class PaymentDomainServiceTest {
 
             assertDeclined(transaction, "51");
             assertThat(transaction.getDeclineReason()).contains("Se excede el límite diario");
-            verify(creditLimitPort, never()).consumeCredit(any(), any(), any(), anyString());
+            verify(creditLimitPort, never()).consumeCredit(any(), any(), any(), any(), anyString());
             verifyNoInteractions(authorizationPort);
         }
 
@@ -240,7 +240,7 @@ class PaymentDomainServiceTest {
             assertThat(transaction.getType()).isEqualTo(TransactionType.PURCHASE);
             assertThat(transaction.getStatus()).isEqualTo(TransactionStatus.AUTHORIZED);
             assertThat(transaction.getDomainEvents()).noneMatch(PaymentProcessed.class::isInstance);
-            verify(creditLimitPort).consumeCredit(eq(CARD_ID), eq(AMOUNT), eq(TransactionType.PURCHASE), anyString());
+            verify(creditLimitPort).consumeCredit(any(), eq(CARD_ID), eq(AMOUNT), eq(TransactionType.PURCHASE), anyString());
         }
 
         @Test
@@ -257,7 +257,7 @@ class PaymentDomainServiceTest {
         @Test
         void shouldDeclineAndVoidAuthorizationWhenCreditConsumptionIsRejected() {
             doThrow(new InsufficientFundsException(CARD_ID, AMOUNT, Money.ofARS(0), "Sin disponible"))
-                    .when(creditLimitPort).consumeCredit(any(), any(), any(), anyString());
+                    .when(creditLimitPort).consumeCredit(any(), any(), any(), any(), anyString());
 
             Transaction transaction = pay(TransactionType.PURCHASE);
 
@@ -389,7 +389,7 @@ class PaymentDomainServiceTest {
             assertThat(refund.getStatus()).isEqualTo(TransactionStatus.APPROVED);
             assertThat(refund.getOriginalTransactionId()).isEqualTo(original.getTransactionId());
             assertThat(refund.getDomainEvents()).anyMatch(RefundProcessed.class::isInstance);
-            verify(creditLimitPort).restoreCredit(eq(CARD_ID), eq(AMOUNT),
+            verify(creditLimitPort).restoreCredit(any(), eq(CARD_ID), eq(AMOUNT),
                     eq(original.getTransactionDate().toLocalDate()), contains(original.getTransactionId().toString()));
         }
 
@@ -473,7 +473,7 @@ class PaymentDomainServiceTest {
         service.reverseTransaction(purchase, "Cliente desistió");
 
         assertThat(purchase.getStatus()).isEqualTo(TransactionStatus.REVERSED);
-        verify(creditLimitPort).restoreCredit(eq(CARD_ID), eq(AMOUNT),
+        verify(creditLimitPort).restoreCredit(any(), eq(CARD_ID), eq(AMOUNT),
                 eq(purchase.getTransactionDate().toLocalDate()), contains("Cliente desistió"));
     }
 
@@ -485,7 +485,7 @@ class PaymentDomainServiceTest {
 
         assertThat(preAuthorized.getStatus()).isEqualTo(TransactionStatus.REVERSED);
         verify(authorizationPort).voidAuthorization(preAuthorized);
-        verify(creditLimitPort).restoreCredit(eq(CARD_ID), eq(AMOUNT), any(), anyString());
+        verify(creditLimitPort).restoreCredit(any(), eq(CARD_ID), eq(AMOUNT), any(), anyString());
     }
 
     @Test

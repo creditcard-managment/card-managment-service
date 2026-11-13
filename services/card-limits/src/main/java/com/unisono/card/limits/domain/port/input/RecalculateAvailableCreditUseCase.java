@@ -30,22 +30,68 @@ public interface RecalculateAvailableCreditUseCase {
      */
     CreditLimit restoreCredit(RestoreCreditCommand command);
 
+    /**
+     * Deshace una operación de consumo o restauración identificada por el cliente.
+     * Si la operación todavía no llegó, la anula: cuando llegue se rechaza. Es idempotente.
+     */
+    CancelOperationResult cancelOperation(CancelOperationCommand command);
+
     // ========================================
     // Commands
     // ========================================
 
+    /**
+     * @param operationId opcional: con un id, la operación es idempotente y se puede cancelar
+     */
     record ConsumeCreditCommand(
             String creditLimitId,
             Money amount,
-            String description
-    ) {}
+            String description,
+            String operationId
+    ) {
+        public ConsumeCreditCommand(String creditLimitId, Money amount, String description) {
+            this(creditLimitId, amount, description, null);
+        }
+    }
 
+    /**
+     * @param operationId opcional: con un id, la operación es idempotente y se puede cancelar
+     */
     record RestoreCreditCommand(
             String creditLimitId,
             Money amount,
             java.time.LocalDate originalTransactionDate,
-            String description
+            String description,
+            String operationId
+    ) {
+        public RestoreCreditCommand(String creditLimitId, Money amount, java.time.LocalDate originalTransactionDate,
+                                    String description) {
+            this(creditLimitId, amount, originalTransactionDate, description, null);
+        }
+    }
+
+    record CancelOperationCommand(
+            String creditLimitId,
+            String operationId
     ) {}
+
+    /**
+     * @param outcome     qué pasó con la operación
+     * @param creditLimit el límite después de la cancelación
+     */
+    record CancelOperationResult(
+            CancelOutcome outcome,
+            CreditLimit creditLimit
+    ) {}
+
+    enum CancelOutcome {
+        /** Estaba aplicada y se deshizo */
+        CANCELLED,
+        /** No había llegado: queda anulada y se rechaza si llega después */
+        VOIDED,
+        /** Ya estaba cancelada o anulada: no se hizo nada */
+        ALREADY_CANCELLED
+    }
 
     record ReleaseCreditCommand(
             String creditLimitId,

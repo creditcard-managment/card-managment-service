@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
  * Event published when a payment is successfully authorized
  */
 @Getter
-public class PaymentAuthorized extends DomainEvent {
+public class PaymentAuthorized extends DomainEvent implements PaymentEvent {
 
     private final TransactionId transactionId;
     private final CardId cardId;

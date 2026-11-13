@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
  * Event published when a transaction has been settled (liquidated)
  */
 @Getter
-public class TransactionSettled extends DomainEvent {
+public class TransactionSettled extends DomainEvent implements PaymentEvent {
 
     private final TransactionId transactionId;
     private final CardId cardId;

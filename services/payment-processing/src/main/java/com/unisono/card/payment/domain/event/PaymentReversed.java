@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
  * Event published when a payment is reversed
  */
 @Getter
-public class PaymentReversed extends DomainEvent {
+public class PaymentReversed extends DomainEvent implements PaymentEvent {
 
     private final TransactionId transactionId;
     private final CardId cardId;

@@ -99,6 +99,28 @@ public class DailyLimit implements Serializable {
     }
 
     /**
+     * Consumido en el día en curso (cero si el cupo ya se reseteó)
+     */
+    public Money currentConsumed() {
+        return needsReset() ? Money.zero(this.consumed.getCurrencyCode()) : this.consumed;
+    }
+
+    /**
+     * Deshace lo que movió una operación en el cupo (positivo = había consumido, negativo = había devuelto).
+     * Solo aplica si la operación es del día en curso: si no, el cupo ya se reseteó. Lo consumido no baja de cero.
+     */
+    public DailyLimit revert(Money delta, LocalDate appliedOn) {
+        if (delta.isZero() || needsReset() || !this.resetDate.equals(appliedOn)) {
+            return this;
+        }
+        Money newConsumed = this.consumed.subtract(delta);
+        if (newConsumed.isNegative()) {
+            newConsumed = Money.zero(this.consumed.getCurrencyCode());
+        }
+        return new DailyLimit(this.amount, newConsumed, this.resetDate);
+    }
+
+    /**
      * Verifica si necesita reset (cambió el día)
      */
     public boolean needsReset() {

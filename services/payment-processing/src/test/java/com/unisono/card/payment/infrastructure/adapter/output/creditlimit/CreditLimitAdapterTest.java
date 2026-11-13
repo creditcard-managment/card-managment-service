@@ -103,9 +103,10 @@ class CreditLimitAdapterTest {
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(jsonPath("$.amount").value(1500.00))
                 .andExpect(jsonPath("$.description").value("Compra X"))
+                .andExpect(jsonPath("$.operationId").value("op-1"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
-        adapter.consumeCredit(CARD_ID, AMOUNT, TransactionType.PURCHASE, "Compra X");
+        adapter.consumeCredit("op-1", CARD_ID, AMOUNT, TransactionType.PURCHASE, "Compra X");
 
         server.verify();
     }
@@ -116,7 +117,7 @@ class CreditLimitAdapterTest {
         server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/consume-cash-advance"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
-        adapter.consumeCredit(CARD_ID, AMOUNT, TransactionType.CASH_ADVANCE, "Adelanto");
+        adapter.consumeCredit("op-1", CARD_ID, AMOUNT, TransactionType.CASH_ADVANCE, "Adelanto");
 
         server.verify();
     }
@@ -127,7 +128,7 @@ class CreditLimitAdapterTest {
         server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/consume-purchase"))
                 .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY));
 
-        assertThatThrownBy(() -> adapter.consumeCredit(CARD_ID, AMOUNT, TransactionType.PURCHASE, "Compra"))
+        assertThatThrownBy(() -> adapter.consumeCredit("op-1", CARD_ID, AMOUNT, TransactionType.PURCHASE, "Compra"))
                 .isInstanceOf(InsufficientFundsException.class);
     }
 
@@ -139,9 +140,10 @@ class CreditLimitAdapterTest {
                 .andExpect(jsonPath("$.currency").value("ARS"))
                 .andExpect(jsonPath("$.originalTransactionDate").value("2026-11-02"))
                 .andExpect(jsonPath("$.description").value("Reversal"))
+                .andExpect(jsonPath("$.operationId").value("op-1"))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
-        adapter.restoreCredit(CARD_ID, AMOUNT, ORIGINAL_DATE, "Reversal");
+        adapter.restoreCredit("op-1", CARD_ID, AMOUNT, ORIGINAL_DATE, "Reversal");
 
         server.verify();
     }
@@ -153,7 +155,7 @@ class CreditLimitAdapterTest {
                 .andExpect(jsonPath("$.description").value("x".repeat(255)))
                 .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
 
-        adapter.restoreCredit(CARD_ID, AMOUNT, ORIGINAL_DATE, "x".repeat(300));
+        adapter.restoreCredit("op-1", CARD_ID, AMOUNT, ORIGINAL_DATE, "x".repeat(300));
 
         server.verify();
     }
@@ -163,7 +165,31 @@ class CreditLimitAdapterTest {
         server.expect(requestTo(BASE + "/api/v1/credit-limits/card/" + CARD_ID.getValue()))
                 .andRespond(withStatus(HttpStatus.NOT_FOUND));
 
-        assertThatThrownBy(() -> adapter.restoreCredit(CARD_ID, AMOUNT, ORIGINAL_DATE, "Reversal"))
+        assertThatThrownBy(() -> adapter.restoreCredit("op-1", CARD_ID, AMOUNT, ORIGINAL_DATE, "Reversal"))
+                .isInstanceOf(ExternalServiceException.class);
+    }
+
+    @Test
+    void shouldCancelOperationOnResolvedCreditLimit() {
+        expectCreditLimitLookup();
+        server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/operations/op-1/cancel"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("""
+                        {"operationId":"op-1","outcome":"CANCELLED","availableCredit":100000.00,"currency":"ARS"}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(adapter.cancelOperation("op-1", CARD_ID)).isEqualTo("CANCELLED");
+
+        server.verify();
+    }
+
+    @Test
+    void shouldFailCancellingWhenCardLimitsIsDown() {
+        expectCreditLimitLookup();
+        server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/operations/op-1/cancel"))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+
+        assertThatThrownBy(() -> adapter.cancelOperation("op-1", CARD_ID))
                 .isInstanceOf(ExternalServiceException.class);
     }
 

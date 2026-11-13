@@ -251,12 +251,25 @@ Los dos montos son opcionales (> 0 si se envían). Todos estos endpoints respond
 
 | Método y ruta | Body | Efecto |
 |---|---|---|
-| `POST /{creditLimitId}/consume-purchase` | `{ "amount": 5000.00, "currency": "ARS", "description": "Compra en Mercado Libre" }` | Consume crédito por una compra |
+| `POST /{creditLimitId}/consume-purchase` | `{ "amount": 5000.00, "currency": "ARS", "description": "Compra en Mercado Libre", "operationId": "6f1c…" }` | Consume crédito por una compra |
 | `POST /{creditLimitId}/consume-cash-advance` | ídem | Consume crédito por un adelanto |
 | `POST /{creditLimitId}/release-credit` | `{ "paymentAmount": 10000.00, "currency": "ARS", "description": "Pago de resumen" }` | Libera crédito (pago del resumen) |
-| `POST /{creditLimitId}/restore-credit` | `{ "amount": 1500.00, "currency": "ARS", "originalTransactionDate": "2026-11-03", "description": "Reverso de …" }` | Deshace un consumo (reverso o devolución): disponible y cupo diario y mensual del período de la transacción original. Si ya se pagó, el excedente no se restaura (se loguea) |
+| `POST /{creditLimitId}/restore-credit` | `{ "amount": 1500.00, "currency": "ARS", "originalTransactionDate": "2026-11-03", "description": "Reverso de …", "operationId": "7a2d…" }` | Deshace un consumo (reverso o devolución): disponible y cupo diario y mensual del período de la transacción original. Si ya se pagó, el excedente no se restaura (se loguea) |
+| `POST /{creditLimitId}/operations/{operationId}/cancel` | — | Deshace exactamente un consumo o una restauración enviados con `operationId` (ver abajo). Responde `{ "operationId", "outcome", "availableCredit", "currency" }` |
 
-Respuesta **200** `CreditLimitResponse`. `description` es obligatoria pero **no se guarda**. Las operaciones no son idempotentes: repetir el request consume dos veces.
+Respuesta **200** `CreditLimitResponse`. `description` es obligatoria; solo se guarda en `credit_operations` cuando viene `operationId`.
+
+**Operaciones idempotentes (`operationId`, opcional, hasta 64 caracteres).** payment-processing lo envía siempre ([PAYMENT.md §4.7](PAYMENT.md)):
+
+- Un consumo o una restauración con `operationId` se registra en `credit_operations` con lo que movió: deltas de lo consumido, del cupo diario y del mensual, y la fecha en que se aplicó.
+- Repetir el mismo `operationId` no vuelve a aplicar nada: responde 200 con el estado actual. Si llega con otro tipo de operación o para otro límite, responde 422.
+- **Cancelar** deshace exactamente esos deltas. Lo consumido no baja de cero. El cupo diario o mensual solo se toca si sigue siendo el mismo día o mes: si ya se reseteó, no hay nada que devolver. No valida límites, así que deshacer una restauración puede dejar el disponible por debajo de lo que permitiría una compra nueva. `outcome`:
+  - `CANCELLED`: estaba aplicada y se deshizo.
+  - `VOIDED`: todavía no había llegado. Queda anulada y, si llega después, se rechaza con **409**. Cubre el caso de un timeout en el que el request todavía no se aplicó.
+  - `ALREADY_CANCELLED`: ya estaba cancelada o anulada; no se hace nada.
+- Sin `operationId`, el comportamiento es el anterior: no se registra y repetir el request aplica dos veces.
+
+Consumo, restauración, liberación y cancelación bloquean la fila del límite (`SELECT … FOR UPDATE`) hasta el fin de la transacción, así que se ejecutan de a una por límite.
 
 ### 4.5 Validación (sin consumir)
 
@@ -294,6 +307,7 @@ Mismo formato que `card-data`:
 | `NotFoundException` | 404 | Límite o tarjeta inexistente |
 | `ValidationException` (incluye `InvalidValueObjectException`) | 400 | Montos fuera de rango en los VO, monto cero, moneda inválida |
 | `MethodArgumentNotValidException` | 400 + `fieldErrors` | Bean Validation |
+| `CreditOperationCancelledException` | 409 | Llega un consumo o una restauración cuyo `operationId` ya se canceló (anulado) |
 | `BusinessRuleException` | 422 | Monedas distintas, tarjeta no elegible, límite duplicado, crédito insuficiente, límite diario o mensual excedido, reducción por debajo de lo consumido |
 | Otras | 500 | — |
 
@@ -392,9 +406,19 @@ No hay jobs programados. Al leer o consumir, `DailyLimit` y `MonthlyLimit` compa
 
 `CardJpaEntity` mapea solo `id`, `status` y `deleted` de la tabla de `card-data`, para validar si la tarjeta puede recibir un límite.
 
-### 6.4 Notas
+### 6.4 `credit_operations`
 
-- **Esquema:** lo crea Flyway desde el repo `card-management-database`: `credit_limits` en V2 y `credit_limit_history` en V3. Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes del arranque.
+Operaciones de crédito identificadas por el cliente (V12), una por `operationId`:
+
+- `operation_id` (PK, hasta 64 caracteres) y `credit_limit_id` (FK a `credit_limits`).
+- `operation_type` (`CONSUME_PURCHASE`, `CONSUME_CASH_ADVANCE` o `RESTORE`; nulo en las `VOIDED`) y `status` (`APPLIED`, `CANCELLED` o `VOIDED`).
+- `credit_delta`, `daily_delta`, `monthly_delta`: lo que movió la operación (positivo = consumió, negativo = devolvió), en `currency`.
+- `applied_on`: fecha en que se aplicó (define si el cupo diario y mensual todavía se pueden revertir).
+- `description`, `created_at` y `cancelled_at`.
+
+### 6.5 Notas
+
+- **Esquema:** lo crea Flyway desde el repo `card-management-database`: `credit_limits` en V2, `credit_limit_history` en V3 y `credit_operations` en V12. Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes del arranque.
 - **Restricciones de la migración que el código no refleja:**
   - `credit_limits.card_id` → FK a `cards(id)` (`ON DELETE CASCADE`).
   - `chk_consumed_not_negative`: `consumed_credit_amount`, `daily_limit_consumed` y `monthly_limit_consumed` ≥ 0.
@@ -446,7 +470,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 |---|---|---|
 | `card-data` | `card-limits` lee `cards.status` y `cards.deleted` | Funciona (acoplamiento por base compartida) |
 | `card-lifecycle` | Lee `credit_limits` por `card_id` para decidir si se puede activar | La regla existe pero el endpoint de activación no la usa ([LIFECYCLE.md §9](LIFECYCLE.md)); además esa consulta no filtra `deleted` |
-| `payment-processing` | Valida (`validate/*`), consume al aprobar (`consume-*`) y restaura en reversos y devoluciones (`restore-credit`) por REST | Funciona ([PAYMENT.md §7](PAYMENT.md)) |
+| `payment-processing` | Valida (`validate/*`), consume al aprobar (`consume-*`) y restaura en reversos y devoluciones (`restore-credit`) por REST, siempre con `operationId`. Cancela las operaciones cuyo pago no confirmó (`operations/{id}/cancel`) | Funciona ([PAYMENT.md §4.7 y §7](PAYMENT.md)) |
 | `card-events` | Existen los topics `credit-limit.*` y sus contratos ([EVENTS.md §4.9](EVENTS.md)) | `card-limits` no publica eventos |
 
 ---
@@ -455,7 +479,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 
 ### 9.1 Críticas
 
-1. **Sin control de concurrencia.** `CreditLimitEntity` no tiene `@Version` y el flujo es leer → modificar → guardar. Dos consumos simultáneos sobre el mismo límite pueden pisarse (*lost update*) y permitir gastar más que el disponible.
+1. **Control de concurrencia parcial.** Consumo, restauración, liberación y cancelación bloquean la fila del límite (`PESSIMISTIC_WRITE`). El resto de las modificaciones (aumentar o reducir límites, límites temporales) sigue siendo leer → modificar → guardar sin `@Version`: una de ellas simultánea con un consumo puede pisarlo (*lost update*).
 2. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda se rechaza con 422 (“Cannot operate on different currencies”).
 
 ### 9.2 Reglas de negocio
@@ -466,7 +490,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 6. **No se valida el estado de la tarjeta al consumir ni al validar.** Una tarjeta bloqueada, cancelada o vencida puede seguir consumiendo crédito.
 7. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor, y no se valida diario ≤ mensual.
 8. **Sin reserva (hold).** Validar y consumir son operaciones separadas: no hay reserva de fondos ni confirmación posterior.
-9. **Sin registro de movimientos ni idempotencia.** Consumos y liberaciones no dejan historial (`description` se descarta) ni reciben un id de transacción para evitar duplicados.
+9. **Registro de movimientos incompleto.** Solo los consumos y restauraciones con `operationId` quedan en `credit_operations`. Los que llegan sin id y las liberaciones (pago del resumen) no dejan registro ni son idempotentes.
 10. **Sin saldo a favor.** `restore-credit` baja lo consumido como mucho hasta cero. Si la tarjeta ya pagó el consumo que se devuelve, el excedente no se acredita y solo se loguea.
 
 ### 9.3 Técnicas
@@ -477,4 +501,4 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 14. **Dos endpoints de asignación** (`POST /` y `POST /cards/{cardId}`) con reglas distintas para el `cardId`.
 15. **`CreditLimitManagementService` se declara dos veces:** con `@Service` y como `@Bean` en `CreditLimitUseCaseConfig`. Lo mismo pasa con `CreditValidationService`.
 16. **Sin eventos:** no publica `credit-limit.assigned`, `credit-limit.consumed`, etc., aunque los topics existen en `card-events` ([EVENTS.md §3](EVENTS.md)).
-17. **Tests mínimos:** solo `CreditLimitRestoreTest` (dominio de `restoreConsumption`). No hay tests de servicios, endpoints ni persistencia, aunque `pom.xml` declara Mockito y Testcontainers.
+17. **Tests incompletos:** `CreditLimitRestoreTest` (dominio de `restoreConsumption` y `revertOperation`), `CreditLimitControllerTest` y `CreditOperationIdempotencyTest` (idempotencia, cancelación y anulación, con repositorios en memoria). No hay tests de persistencia ni del lock, aunque `pom.xml` declara Testcontainers.

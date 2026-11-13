@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
  * Event published when a transaction lifecycle is completed
  */
 @Getter
-public class TransactionCompleted extends DomainEvent {
+public class TransactionCompleted extends DomainEvent implements PaymentEvent {
 
     private final TransactionId transactionId;
     private final CardId cardId;

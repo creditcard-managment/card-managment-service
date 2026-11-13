@@ -1,6 +1,5 @@
 package com.unisono.card.payment.infrastructure.config;
 
-import com.unisono.card.events.domain.DomainEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -46,7 +45,7 @@ public class KafkaPaymentConfig {
      * Producer factory configuration
      */
     @Bean
-    public ProducerFactory<String, DomainEvent> paymentEventProducerFactory() {
+    public ProducerFactory<String, Object> paymentEventProducerFactory() {
         Map<String, Object> configProps = new HashMap<>();
 
         // Connection
@@ -60,6 +59,13 @@ public class KafkaPaymentConfig {
         configProps.put(ProducerConfig.ACKS_CONFIG, acks);
         configProps.put(ProducerConfig.RETRIES_CONFIG, retries);
         configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+        // Timeouts acotados: el productor debe resolver cada envío (éxito o error) antes de que
+        // PaymentOutboxRelay deje de esperar (payment.outbox.send-timeout-ms). Así un envío fallido
+        // no queda en el buffer para entregarse más tarde y duplicarse con el reintento del relay.
+        configProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 5000);
+        configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 10000);
+        configProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 5000);
 
         // Performance
         configProps.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, compressionType);
@@ -77,13 +83,13 @@ public class KafkaPaymentConfig {
     }
 
     /**
-     * Kafka Template for publishing events
+     * Kafka Template used by PaymentOutboxRelay (sends the JSON stored in the outbox)
      */
     @Bean
-    public KafkaTemplate<String, DomainEvent> kafkaTemplate(
-            ProducerFactory<String, DomainEvent> producerFactory) {
+    public KafkaTemplate<String, Object> kafkaTemplate(
+            ProducerFactory<String, Object> producerFactory) {
 
-        KafkaTemplate<String, DomainEvent> template = new KafkaTemplate<>(producerFactory);
+        KafkaTemplate<String, Object> template = new KafkaTemplate<>(producerFactory);
 
         // Enable observation for metrics/tracing
         template.setObservationEnabled(true);

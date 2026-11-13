@@ -302,7 +302,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 ## 6. Eventos de `payment-processing`
 
-`payment-processing` reutiliza solo la clase base `DomainEvent` de esta librería. Sus eventos viven en `com.unisono.card.payment.domain.event`: se acumulan en el aggregate `Transaction` y los servicios de aplicación los publican después de guardar (`publishAll(getDomainEvents())` + `clearDomainEvents()`).
+`payment-processing` reutiliza solo la clase base `DomainEvent` de esta librería. Sus eventos viven en `com.unisono.card.payment.domain.event`: se acumulan en el aggregate `Transaction` y los servicios de aplicación los publican después de guardar (`publishAll(getDomainEvents())` + `clearDomainEvents()`). La publicación va por un outbox propio (`payment_outbox_events`): `OutboxPaymentEventPublisher` los guarda en la misma transacción y `PaymentOutboxRelay` los envía después del commit ([PAYMENT.md §4.7](PAYMENT.md)).
 
 | Evento | Topic (default) | Campos | ¿Se genera? |
 |---|---|---|---|
@@ -312,16 +312,16 @@ docker exec -it card-management-kafka kafka-console-consumer \
 | `PaymentDeclined` | `payment.processing.declined` | `transactionId`, `cardId`, `declineReason`, `declinedAt` | Sí |
 | `PaymentReversed` | `payment.reversal.completed` | `transactionId`, `cardId`, `amount`, `reversalReason`, `reversedAt` | Sí |
 | `RefundInitiated` | `payment.refund.initiated` | `refundTransactionId`, `originalTransactionId`, `cardId`, `amount`, `initiatedAt` | Sí |
-| `RefundProcessed` | `payment.refund.processed` | `refundTransactionId`, `originalTransactionId`, `cardId`, `amount`, `processedAt` | **No** (ningún código lo instancia) |
+| `RefundProcessed` | `payment.refund.processed` | `refundTransactionId`, `originalTransactionId`, `cardId`, `amount`, `processedAt` | Sí (`approveRefund()`) |
 | `TransactionSettled` | `payment.settlement.completed` | `transactionId`, `cardId`, `amount`, `settledAt` | Sí |
-| `TransactionCompleted` | `payment.transaction.completed` | `transactionId`, `cardId`, `finalStatus`, `completedAt` | Sí |
+| `TransactionCompleted` | `payment.transaction.completed` | `transactionId`, `cardId`, `finalStatus`, `completedAt` | **No** (`complete()` no se usa) |
 | `FraudDetected` | `payment.fraud.detected` | `transactionId`, `cardId`, `riskScore`, `fraudReason`, `detectionMethod`, `detectedAt` | **No** |
 | *(desconocido)* | `payment.events` | — | Topic por defecto de `PaymentEventTopicResolver` |
 
 Características propias:
 
 - Los topics se configuran en `spring.kafka.topics.*` y `KafkaPaymentConfig` los declara como `NewTopic` (3 particiones, replication factor 2).
-- **Key = `eventId`**, no el id de la transacción ni de la tarjeta.
+- **Key = `cardId`**: todos los eventos implementan `PaymentEvent` (`getCardId()`), así que los de una tarjeta, y los de cada una de sus transacciones, quedan en la misma partición y en orden. Entrega *at-least-once*: deduplicar por `eventId`.
 - Los campos son Value Objects (`TransactionId`, `CardId`, `TransactionAmount`), así que en el JSON aparecen como objetos anidados (por ejemplo `"cardId": { "value": "…" }`), a diferencia de los eventos de tarjeta, que usan `String`.
 - **Ningún servicio consume estos topics** hoy.
 
@@ -355,9 +355,9 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 | Aspecto | Comportamiento actual |
 |---|---|
-| Atomicidad DB ↔ Kafka | En card-data, garantizada con transactional outbox: el evento se confirma junto con la tarjeta y el relay lo publica hasta lograrlo. payment-processing sigue publicando dentro de la transacción, sin outbox. |
+| Atomicidad DB ↔ Kafka | Garantizada con transactional outbox en card-data (`outbox_events`) y en payment-processing (`payment_outbox_events`): el evento se confirma junto con el cambio y el relay lo publica hasta lograrlo. |
 | Entrega al broker | *At-least-once*: `acks=all` + idempotencia del productor + reintentos del relay. Un evento puede llegar dos veces con el mismo `eventId`: si la instancia cae entre el envío y el commit, o si un envío ya estaba en vuelo cuando el productor lo dio por vencido y el broker lo escribe igual (ocurre con cortes del broker). |
-| Orden | Por tarjeta dentro de cada topic `card.*` (key `cardId`). No hay orden entre topics distintos. Sin orden por transacción en `payment.*` (key `eventId`). |
+| Orden | Por tarjeta dentro de cada topic `card.*` y `payment.*` (key `cardId`). No hay orden entre topics distintos. |
 | Procesamiento en el consumidor | *At-least-once*: ack manual después de procesar. |
 | Idempotencia del consumidor | card-lifecycle descarta duplicados de `card.created`: cada tarjeta tiene una sola transición `CREATE` (verificación previa + índice único `uq_state_transitions_create`). |
 | Errores en el consumidor | Reintentos con espera exponencial y, si no alcanza, DLQ (§5.3). Un JSON ilegible va a la DLQ sin reintentos. |
@@ -371,7 +371,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 1. Crear la clase en `com.unisono.card.events.domain`, extendiendo `DomainEvent`, con campos `final` de tipos simples (`String`, números, `LocalDateTime`). No incluir datos sensibles (PAN, CVV, PIN).
 2. Agregar dos constructores: uno `@JsonCreator` con `@JsonProperty` para todos los campos, incluidos `eventId` y `occurredOn` (llama a `super(eventId, occurredOn)`), y otro de negocio que llame a `super()`.
 3. Agregar el nombre del topic a `KafkaTopics` siguiendo la convención `<dominio>.<hecho>`.
-4. En el productor, encolarlo con `EventOutboxPort.enqueue(topic, aggregateId, event)` dentro de la transacción del caso de uso (en card-data; los demás servicios todavía no tienen outbox). El id del aggregate es la key del mensaje y preserva el orden.
+4. En el productor, encolarlo con `EventOutboxPort.enqueue(topic, aggregateId, event)` dentro de la transacción del caso de uso (en card-data; en payment-processing basta con agregarlo al aggregate y publicarlo con `PaymentEventPublisher`, que va por su outbox). El id del aggregate es la key del mensaje y preserva el orden.
 5. En el consumidor, hacer el ack solo tras procesar con éxito, propagar las excepciones para que actúe el error handler y manejar duplicados con `eventId`.
 6. Agregar el evento a `EventContractTest` y documentarlo en este archivo (§3 y §4).
 
@@ -383,7 +383,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 2. **Sin evento de vencimiento.** Pasar a `EXPIRED` no publica nada: no hay `card.expired` en el catálogo.
 3. **DLQ sin reproceso automático** (ver §5.3): reinyectar mensajes es manual y un corte largo de la base puede llenarla. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
 4. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
-5. **Eventos de pago sin consumidores**, con key `eventId` (el comentario del código dice “to ensure ordering”, pero una key única por evento no ordena nada), y `RefundProcessed` y `FraudDetected` nunca se emiten.
+5. **Eventos de pago sin consumidores**, y `FraudDetected` y `TransactionCompleted` nunca se emiten.
 6. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
 7. **Replication factor 2 con un solo broker:** `KafkaPaymentConfig` declara los topics de pago con `replicas=2`, que el broker único del compose no puede satisfacer. La creación por `KafkaAdmin` falla; los topics terminan creándose por auto-creación con la configuración por defecto.
 8. **Convenciones mezcladas:** `KafkaTopics.TRANSACTION_*` (`transaction.authorized`) no coincide con los topics que realmente usa `payment-processing` (`payment.processing.authorized`); los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados.

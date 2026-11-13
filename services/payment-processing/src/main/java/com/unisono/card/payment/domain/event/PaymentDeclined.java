@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
  * Event published when a payment is declined
  */
 @Getter
-public class PaymentDeclined extends DomainEvent {
+public class PaymentDeclined extends DomainEvent implements PaymentEvent {
 
     private final TransactionId transactionId;
     private final CardId cardId;

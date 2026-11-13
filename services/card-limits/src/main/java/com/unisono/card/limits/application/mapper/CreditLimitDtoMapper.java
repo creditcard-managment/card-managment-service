@@ -104,7 +104,8 @@ public class CreditLimitDtoMapper {
         return new RecalculateAvailableCreditUseCase.ConsumeCreditCommand(
                 creditLimitId,
                 amount,
-                request.getDescription()
+                request.getDescription(),
+                blankToNull(request.getOperationId())
         );
     }
 
@@ -117,8 +118,13 @@ public class CreditLimitDtoMapper {
                 creditLimitId,
                 amount,
                 request.getOriginalTransactionDate(),
-                request.getDescription()
+                request.getDescription(),
+                blankToNull(request.getOperationId())
         );
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     public RecalculateAvailableCreditUseCase.ReleaseCreditCommand toReleaseCommand(

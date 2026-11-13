@@ -1,5 +1,6 @@
 package com.unisono.card.limits.infrastructure.adapter.input.rest;
 
+import com.unisono.card.limits.domain.exception.CreditOperationCancelledException;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.exception.ValidationException;
@@ -48,6 +49,20 @@ public class GlobalExceptionHandler {
                 .build();
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    @ExceptionHandler(CreditOperationCancelledException.class)
+    public ResponseEntity<ErrorResponse> handleCreditOperationCancelled(CreditOperationCancelledException ex) {
+        log.warn("CreditOperationCancelledException: {}", ex.getMessage());
+
+        ErrorResponse error = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.CONFLICT.value())
+                .error("Conflict")
+                .message(ex.getMessage())
+                .build();
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     @ExceptionHandler(BusinessRuleException.class)

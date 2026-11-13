@@ -126,7 +126,7 @@ public class PaymentDomainService {
             transaction.authorize(authCode, riskScore);
 
             // 9. Consume credit in card-limits
-            creditLimitPort.consumeCredit(cardId, amount.getEffectiveAmount(), type,
+            creditLimitPort.consumeCredit(transaction.getTransactionId(), cardId, amount.getEffectiveAmount(), type,
                     creditDescription(transaction));
 
             // 10. Approve transaction (a pre-authorization stays AUTHORIZED until captured)
@@ -194,7 +194,8 @@ public class PaymentDomainService {
         refundTransaction.approveRefund(originalTransactionId);
 
         // 6. Undo the consumption of the original (available credit, daily and monthly quota)
-        creditLimitPort.restoreCredit(cardId, requested, original.getTransactionDate().toLocalDate(),
+        creditLimitPort.restoreCredit(refundTransaction.getTransactionId(), cardId, requested,
+                original.getTransactionDate().toLocalDate(),
                 "Refund " + refundTransaction.getTransactionId() + " of " + originalTransactionId);
 
         log.info("Refund processed successfully: {}", refundTransaction.getTransactionId());
@@ -228,7 +229,8 @@ public class PaymentDomainService {
 
         // 2. Undo the consumption (available credit, daily and monthly quota)
         Money amount = transaction.getAmount().getEffectiveAmount();
-        creditLimitPort.restoreCredit(transaction.getCardId(), amount, transaction.getTransactionDate().toLocalDate(),
+        creditLimitPort.restoreCredit(transaction.getTransactionId(), transaction.getCardId(), amount,
+                transaction.getTransactionDate().toLocalDate(),
                 "Reversal of " + transaction.getTransactionId() + ": " + reason);
 
         log.info("Transaction reversed successfully: {}", transaction.getTransactionId());
