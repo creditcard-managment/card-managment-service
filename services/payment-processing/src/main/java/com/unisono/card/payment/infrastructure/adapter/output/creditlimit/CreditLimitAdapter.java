@@ -131,9 +131,10 @@ public class CreditLimitAdapter {
      * Undo an operation in card-limits. If it never arrived, card-limits voids it and rejects it if it arrives
      * later. Idempotent.
      *
-     * @return the outcome reported by card-limits (CANCELLED, VOIDED or ALREADY_CANCELLED)
+     * @return the outcome reported by card-limits (CANCELLED, VOIDED or ALREADY_CANCELLED) and how much the card
+     *         ended up over its limit (undoing a restoration whose credit had already been spent)
      */
-    public String cancelOperation(String operationId, CardId cardId) {
+    public Cancellation cancelOperation(String operationId, CardId cardId) {
         log.debug("Cancelling credit operation {} of card {}", operationId, cardId);
 
         String creditLimitId = findCreditLimitId(cardId);
@@ -141,9 +142,11 @@ public class CreditLimitAdapter {
                 creditLimitId, operationId);
         try {
             CancelOperationResponse response = restTemplate.postForObject(url, null, CancelOperationResponse.class);
-            String outcome = response != null ? response.getOutcome() : null;
-            log.info("Cancelled credit operation {} of card {}: {}", operationId, cardId, outcome);
-            return outcome;
+            Cancellation cancellation = new Cancellation(
+                    response != null ? response.getOutcome() : null,
+                    response != null && response.getOverLimitAmount() != null ? response.getOverLimitAmount() : BigDecimal.ZERO);
+            log.info("Cancelled credit operation {} of card {}: {}", operationId, cardId, cancellation.outcome());
+            return cancellation;
 
         } catch (RestClientException ex) {
             log.error("Error cancelling credit operation {} of {}: {}", operationId, cardId, ex.getMessage());
@@ -226,5 +229,19 @@ public class CreditLimitAdapter {
     static class CancelOperationResponse {
         private String operationId;
         private String outcome;
+        private BigDecimal overLimitAmount;
+    }
+
+    /**
+     * Result of cancelling a credit operation in card-limits
+     *
+     * @param outcome         CANCELLED, VOIDED or ALREADY_CANCELLED
+     * @param overLimitAmount how much the card is over its limit afterwards (zero if it is not)
+     */
+    public record Cancellation(String outcome, BigDecimal overLimitAmount) {
+
+        public boolean leftOverLimit() {
+            return overLimitAmount != null && overLimitAmount.signum() > 0;
+        }
     }
 }

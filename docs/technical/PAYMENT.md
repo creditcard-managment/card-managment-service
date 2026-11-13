@@ -297,7 +297,7 @@ Una transacción de pago toca tres sistemas: su tabla, card-limits (REST) y Kafk
    - Apenas termina la transacción, `CreditOperationCompensator` la cancela en card-limits (`POST /{creditLimitId}/operations/{operationId}/cancel`) y la marca **`COMPENSATED`**.
    - Si eso falla, si el proceso se cae o si no se sabe si el commit llegó, `CreditOperationReconciler` la compensa después. Corre cada 30 s y solo toma las `PENDING` de más de 60 s que ninguna transacción tiene tomadas (`FOR UPDATE SKIP LOCKED`). Reintenta sin límite.
 
-Cancelar es seguro en todos los casos. Si la operación se aplicó, card-limits la deshace exactamente: devuelve lo consumido o vuelve a consumir lo restaurado. Si no llegó a aplicarse (timeout antes de llegar), la anula y la rechaza si llega después. Así un timeout de card-limits nunca deja el crédito movido sin una transacción que lo respalde.
+Cancelar es seguro en todos los casos. Si la operación se aplicó, card-limits la deshace exactamente: devuelve lo consumido o vuelve a consumir lo restaurado. Volver a consumir **no valida el disponible**, a propósito: el reverso o la devolución nunca se guardaron, así que el crédito restaurado no le correspondía al cliente aunque ya lo haya gastado. Si lo gastó, la tarjeta queda **excedida**: card-limits informa el exceso (`overLimitAmount`) y payment-processing lo cuenta en `payment_credit_saga_over_limit_total`, lo loguea y dispara una alerta (§9.4). Las compras siguientes se rechazan por crédito insuficiente hasta que pague. Si no llegó a aplicarse (timeout antes de llegar), la anula y la rechaza si llega después. Así un timeout de card-limits nunca deja el crédito movido sin una transacción que lo respalde.
 
 | Falla | Resultado |
 |---|---|
@@ -604,6 +604,7 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 | `payment_credit_saga_pending` | gauge | Operaciones de crédito `PENDING`: pagos que no confirmaron y todavía no se compensaron |
 | `payment_credit_saga_stuck` | gauge | `PENDING` con 5 o más cancelaciones fallidas, o de más de 15 min. **El disponible en card-limits está mal hasta que se compensen** |
 | `payment_credit_saga_compensations_total{result, source}` | contador | Compensaciones: `result` = `compensated` / `failed`; `source` = `immediate` (al deshacerse la transacción) / `reconciler` |
+| `payment_credit_saga_over_limit_total` | contador | Compensaciones que dejaron la tarjeta excedida (ver §4.7) |
 | `payment_outbox_pending` | gauge | Eventos sin publicar |
 | `payment_outbox_stalled` | gauge | Eventos sin publicar de más de 5 min (Kafka inaccesible) |
 | `payment_outbox_failed` | gauge | Eventos con error permanente (no se reintentan) |
@@ -614,7 +615,7 @@ Además:
 - **Health `paymentConsistency`** (`/actuator/health`): `UP`, o **`DEGRADED`** si hay operaciones trabadas o eventos atascados o fallidos, con los conteos en el detalle. `DEGRADED` responde **200**: el servicio sigue atendiendo y un reinicio no arregla el problema, así que no conviene que un orquestador lo reinicie.
 - **Log:** cada refresco con operaciones trabadas o eventos atascados escribe un `ERROR` (🚨). Cuando una operación llega a 5 intentos fallidos, se loguea una vez que necesita revisión.
 - Las operaciones trabadas se siguen reintentando sin límite: la alerta avisa, pero la resolución depende de que card-limits vuelva a responder o de una revisión manual.
-- **Reglas de alerta de ejemplo** para Prometheus en `deploy/prometheus/payment-processing-alerts.yml`, validadas con `promtool`: `CreditSagaOperationsStuck` (critical), `CreditSagaCompensationsFailing`, `PaymentOutboxStalled` y `PaymentOutboxEventsFailed` (critical). El docker-compose no incluye Prometheus.
+- **Reglas de alerta de ejemplo** para Prometheus en `deploy/prometheus/payment-processing-alerts.yml`, validadas con `promtool`: `CreditSagaOperationsStuck` (critical), `CreditSagaCompensationsFailing`, `CreditSagaCompensationLeftCardOverLimit`, `PaymentOutboxStalled` y `PaymentOutboxEventsFailed` (critical). El docker-compose no incluye Prometheus.
 
 ---
 
@@ -628,7 +629,7 @@ Además:
 
 ### 10.2 Técnicas
 
-4. **Compensación sin revisión de fondos:** deshacer una restauración vuelve a consumir lo restaurado sin validar límites, así que el disponible puede quedar por debajo de lo que permitiría una compra nueva. Si la compensación ocurre otro día (u otro mes), el cupo diario (o mensual) ya se reseteó y no se vuelve a tocar.
+4. **Exceso de límite por compensación:** deshacer una restauración puede dejar la tarjeta por encima de su límite (§4.7). Es el resultado correcto y se alerta, pero no hay un flujo de negocio para resolverlo: no se avisa al cliente ni se bloquea la tarjeta; solo se rechazan las compras siguientes.
 5. **Versiones de Spring Boot mezcladas:** el parent es Spring Boot 3.2.1, pero el BOM importado (`spring-boot.version`) es 3.3.5, así que Micrometer, Hibernate y otras librerías quedan en versiones de 3.3 con los jars de Boot 3.2. Por eso las métricas usan `micrometer-registry-prometheus-simpleclient`: el autoconfig de Boot 3.2 no detecta el registry nuevo. Alinear las dos versiones es un cambio de todo el repo.
 6. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización). El PIN de los adelantos ya viaja cifrado (PIN block), pero la clave de cifrado de PIN es una sola por configuración, sin HSM ni DUKPT (una clave por transacción). Entre servicios no hay TLS ni autenticación.
 7. **Sin tests de punta a punta:** hay tests unitarios de dominio, servicios de aplicación (incluido `RefundApplicationService`), adapters, saga, outbox y los cinco controllers (MockMvc con los mappers y el `GlobalExceptionHandler` reales). La persistencia se prueba contra PostgreSQL con Testcontainers (`TransactionPersistenceTest`, `OutboxAndCreditOperationQueriesTest`): mapeo, `@Version`, consultas, el lock de `findByIdForUpdate` y los `FOR UPDATE SKIP LOCKED` del relay y del reconciliador. Ese esquema lo genera Hibernate, no las migraciones de `card-management-database`. Falta un test con el contexto completo de Spring, Kafka, card-data y card-limits.

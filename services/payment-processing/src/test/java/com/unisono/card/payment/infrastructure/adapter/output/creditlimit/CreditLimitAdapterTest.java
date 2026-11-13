@@ -175,10 +175,15 @@ class CreditLimitAdapterTest {
         server.expect(requestTo(BASE + "/api/v1/credit-limits/" + LIMIT_ID + "/operations/op-1/cancel"))
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess("""
-                        {"operationId":"op-1","outcome":"CANCELLED","availableCredit":100000.00,"currency":"ARS"}
+                        {"operationId":"op-1","outcome":"CANCELLED","availableCredit":-500.00,"currency":"ARS",
+                         "overLimitAmount":500.00}
                         """, MediaType.APPLICATION_JSON));
 
-        assertThat(adapter.cancelOperation("op-1", CARD_ID)).isEqualTo("CANCELLED");
+        CreditLimitAdapter.Cancellation cancellation = adapter.cancelOperation("op-1", CARD_ID);
+
+        assertThat(cancellation.outcome()).isEqualTo("CANCELLED");
+        assertThat(cancellation.overLimitAmount()).isEqualByComparingTo("500.00");
+        assertThat(cancellation.leftOverLimit()).isTrue();
 
         server.verify();
     }

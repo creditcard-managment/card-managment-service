@@ -255,7 +255,7 @@ Los dos montos son opcionales (> 0 si se envían). Todos estos endpoints respond
 | `POST /{creditLimitId}/consume-cash-advance` | ídem | Consume crédito por un adelanto |
 | `POST /{creditLimitId}/release-credit` | `{ "paymentAmount": 10000.00, "currency": "ARS", "description": "Pago de resumen" }` | Libera crédito (pago del resumen) |
 | `POST /{creditLimitId}/restore-credit` | `{ "amount": 1500.00, "currency": "ARS", "originalTransactionDate": "2026-11-03", "description": "Reverso de …", "operationId": "7a2d…" }` | Deshace un consumo (reverso o devolución): disponible y cupo diario y mensual del período de la transacción original. Si ya se pagó, el excedente no se restaura (se loguea) |
-| `POST /{creditLimitId}/operations/{operationId}/cancel` | — | Deshace exactamente un consumo o una restauración enviados con `operationId` (ver abajo). Responde `{ "operationId", "outcome", "availableCredit", "currency" }` |
+| `POST /{creditLimitId}/operations/{operationId}/cancel` | — | Deshace exactamente un consumo o una restauración enviados con `operationId` (ver abajo). Responde `{ "operationId", "outcome", "availableCredit", "currency", "overLimitAmount" }` |
 
 Respuesta **200** `CreditLimitResponse`. `description` es obligatoria; solo se guarda en `credit_operations` cuando viene `operationId`.
 
@@ -263,7 +263,8 @@ Respuesta **200** `CreditLimitResponse`. `description` es obligatoria; solo se g
 
 - Un consumo o una restauración con `operationId` se registra en `credit_operations` con lo que movió: deltas de lo consumido, del cupo diario y del mensual, y la fecha en que se aplicó.
 - Repetir el mismo `operationId` no vuelve a aplicar nada: responde 200 con el estado actual. Si llega con otro tipo de operación o para otro límite, responde 422.
-- **Cancelar** deshace exactamente esos deltas. Lo consumido no baja de cero. El cupo diario o mensual solo se toca si sigue siendo el mismo día o mes: si ya se reseteó, no hay nada que devolver. No valida límites, así que deshacer una restauración puede dejar el disponible por debajo de lo que permitiría una compra nueva. `outcome`:
+- **Cancelar** deshace exactamente esos deltas. Lo consumido no baja de cero. El cupo diario o mensual solo se toca si sigue siendo el mismo día o mes: si ya se reseteó, no hay nada que devolver.
+- **No valida límites**, a propósito. Deshacer una restauración significa que el reverso o la devolución nunca ocurrieron, así que lo restaurado se vuelve a consumir aunque la tarjeta ya lo haya gastado. En ese caso el disponible queda **negativo** (la tarjeta está excedida): la respuesta informa `overLimitAmount`, se loguea un `WARN` y las compras siguientes se rechazan por crédito insuficiente hasta que pague. `CreditLimit.getOverLimitAmount()` devuelve el exceso. `outcome`:
   - `CANCELLED`: estaba aplicada y se deshizo.
   - `VOIDED`: todavía no había llegado. Queda anulada y, si llega después, se rechaza con **409**. Cubre el caso de un timeout en el que el request todavía no se aplicó.
   - `ALREADY_CANCELLED`: ya estaba cancelada o anulada; no se hace nada.

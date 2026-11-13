@@ -108,6 +108,13 @@ class ConsistencyMonitorTest {
     }
 
     @Test
+    void shouldCountCompensationsThatLeaveTheCardOverItsLimit() {
+        monitor.compensationLeftOverLimit("op-1", "card-1", new java.math.BigDecimal("500.00"));
+
+        assertThat(registry.get("payment.credit_saga.over_limit").counter().count()).isEqualTo(1);
+    }
+
+    @Test
     void shouldCountOutboxFailuresByKind() {
         monitor.outboxPublishFailed(true);
         monitor.outboxPublishFailed(true);

@@ -296,6 +296,11 @@ public class CreditLimitManagementService implements
 
         log.info("Credit operation {} ({}) cancelled. Available: {}",
                 command.operationId(), operation.getType(), savedLimit.getAvailableCredit().getAmount());
+        if (savedLimit.getOverLimitAmount().isPositive()) {
+            log.warn("⚠️ Credit limit {} is over its limit by {} after undoing operation {} ({}): the restored "
+                            + "credit had already been spent. New purchases are declined until it is paid",
+                    command.creditLimitId(), savedLimit.getOverLimitAmount(), command.operationId(), operation.getType());
+        }
         return new CancelOperationResult(CancelOutcome.CANCELLED, savedLimit);
     }
 
