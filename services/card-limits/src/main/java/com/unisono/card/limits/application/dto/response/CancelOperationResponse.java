@@ -30,4 +30,9 @@ public class CancelOperationResponse {
 
     @Schema(description = "Moneda", example = "ARS")
     private String currency;
+
+    @Schema(description = "Cuánto quedó excedida la tarjeta (0 si no). Puede pasar al deshacer una restauración "
+            + "cuyo crédito ya se había gastado: se vuelve a consumir igual, sin validar el disponible",
+            example = "0.00")
+    private BigDecimal overLimitAmount;
 }

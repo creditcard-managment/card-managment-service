@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.adapter.output.creditlimit;
 
+import com.unisono.card.payment.infrastructure.observability.ConsistencyMonitor;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.PaymentCreditOperationEntity;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.repository.JpaPaymentCreditOperationRepository;
 import com.unisono.card.shared.domain.valueobject.CardId;
@@ -31,6 +32,7 @@ public class CreditOperationReconciler {
 
     private final JpaPaymentCreditOperationRepository repository;
     private final CreditLimitAdapter creditLimitAdapter;
+    private final ConsistencyMonitor monitor;
     private final TransactionTemplate transactionTemplate;
 
     @Value("${payment.credit-saga.reconciler.stale-after-seconds:60}")
@@ -41,9 +43,11 @@ public class CreditOperationReconciler {
 
     public CreditOperationReconciler(JpaPaymentCreditOperationRepository repository,
                                      CreditLimitAdapter creditLimitAdapter,
+                                     ConsistencyMonitor monitor,
                                      @Qualifier("paymentTransactionManager") PlatformTransactionManager transactionManager) {
         this.repository = repository;
         this.creditLimitAdapter = creditLimitAdapter;
+        this.monitor = monitor;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -74,15 +78,23 @@ public class CreditOperationReconciler {
 
         for (PaymentCreditOperationEntity operation : pending) {
             try {
-                String outcome = creditLimitAdapter.cancelOperation(operation.getOperationId(),
-                        CardId.of(operation.getCardId()));
+                CreditLimitAdapter.Cancellation cancellation = creditLimitAdapter.cancelOperation(
+                        operation.getOperationId(), CardId.of(operation.getCardId()));
+                String outcome = cancellation.outcome();
                 operation.markCompensated();
+                monitor.compensationSucceeded(ConsistencyMonitor.SOURCE_RECONCILER);
+                if (cancellation.leftOverLimit()) {
+                    monitor.compensationLeftOverLimit(operation.getOperationId(), operation.getCardId(),
+                            cancellation.overLimitAmount());
+                }
                 compensated++;
                 log.warn("↩️ Credit operation {} ({}, {} {}) of transaction {} compensated: {}",
                         operation.getOperationId(), operation.getOperationType(), operation.getAmount(),
                         operation.getCurrency(), operation.getTransactionId(), outcome);
             } catch (Exception ex) {
                 operation.markCompensationFailed(ex.getMessage());
+                monitor.compensationFailed(ConsistencyMonitor.SOURCE_RECONCILER, operation.getOperationId(),
+                        operation.getAttempts());
                 log.error("Could not compensate credit operation {} (attempt {}), will retry: {}",
                         operation.getOperationId(), operation.getAttempts(), ex.getMessage());
             }

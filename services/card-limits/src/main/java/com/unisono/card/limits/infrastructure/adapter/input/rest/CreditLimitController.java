@@ -437,6 +437,7 @@ public class CreditLimitController {
                 .outcome(result.outcome().name())
                 .availableCredit(creditLimit.getAvailableCredit().getAmount().getAmount())
                 .currency(creditLimit.getAvailableCredit().getAmount().getCurrencyCode())
+                .overLimitAmount(creditLimit.getOverLimitAmount().getAmount())
                 .build());
     }
 

@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.adapter.output.creditlimit;
 
+import com.unisono.card.payment.infrastructure.observability.ConsistencyMonitor;
 import com.unisono.card.payment.domain.exception.ExternalServiceException;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.PaymentCreditOperationEntity;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.PaymentCreditOperationEntity.Status;
@@ -34,12 +35,14 @@ class CreditOperationReconcilerTest {
     private CreditLimitAdapter adapter;
     @Mock
     private PlatformTransactionManager transactionManager;
+    @Mock
+    private ConsistencyMonitor monitor;
 
     private CreditOperationReconciler reconciler;
 
     @BeforeEach
     void setUp() {
-        reconciler = new CreditOperationReconciler(repository, adapter, transactionManager);
+        reconciler = new CreditOperationReconciler(repository, adapter, monitor, transactionManager);
     }
 
     @Test
@@ -47,7 +50,7 @@ class CreditOperationReconcilerTest {
         PaymentCreditOperationEntity first = pending("op-1");
         PaymentCreditOperationEntity second = pending("op-2");
         when(repository.lockStalePending(any(), eq(20))).thenReturn(List.of(first, second));
-        when(adapter.cancelOperation(any(), eq(CardId.of(CARD)))).thenReturn("CANCELLED");
+        when(adapter.cancelOperation(any(), eq(CardId.of(CARD)))).thenReturn(new CreditLimitAdapter.Cancellation("CANCELLED", java.math.BigDecimal.ZERO));
 
         int compensated = reconciler.reconcileBatch();
 
@@ -56,6 +59,7 @@ class CreditOperationReconcilerTest {
         assertThat(second.getStatus()).isEqualTo(Status.COMPENSATED);
         assertThat(first.getAttempts()).isEqualTo(1);
         verify(repository).saveAll(List.of(first, second));
+        verify(monitor, org.mockito.Mockito.times(2)).compensationSucceeded(ConsistencyMonitor.SOURCE_RECONCILER);
     }
 
     @Test
@@ -65,7 +69,7 @@ class CreditOperationReconcilerTest {
         when(repository.lockStalePending(any(), eq(20))).thenReturn(List.of(failing, next));
         when(adapter.cancelOperation(eq("op-1"), any()))
                 .thenThrow(new ExternalServiceException("card-limits", "Connection refused", null));
-        when(adapter.cancelOperation(eq("op-2"), any())).thenReturn("VOIDED");
+        when(adapter.cancelOperation(eq("op-2"), any())).thenReturn(new CreditLimitAdapter.Cancellation("VOIDED", java.math.BigDecimal.ZERO));
 
         int compensated = reconciler.reconcileBatch();
 
@@ -74,6 +78,20 @@ class CreditOperationReconcilerTest {
         assertThat(failing.getAttempts()).isEqualTo(1);
         assertThat(failing.getLastError()).contains("Connection refused");
         assertThat(next.getStatus()).isEqualTo(Status.COMPENSATED);
+        verify(monitor).compensationFailed(ConsistencyMonitor.SOURCE_RECONCILER, "op-1", 1);
+    }
+
+    @Test
+    void shouldReportOperationsWhoseCompensationLeftTheCardOverItsLimit() {
+        PaymentCreditOperationEntity restore = pending("op-1");
+        when(repository.lockStalePending(any(), eq(20))).thenReturn(List.of(restore));
+        when(adapter.cancelOperation(eq("op-1"), any()))
+                .thenReturn(new CreditLimitAdapter.Cancellation("CANCELLED", new BigDecimal("1200.00")));
+
+        reconciler.reconcileBatch();
+
+        assertThat(restore.getStatus()).isEqualTo(Status.COMPENSATED);
+        verify(monitor).compensationLeftOverLimit("op-1", CARD, new BigDecimal("1200.00"));
     }
 
     @Test

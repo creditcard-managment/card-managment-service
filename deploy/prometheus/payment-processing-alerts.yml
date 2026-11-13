@@ -1,0 +1,65 @@
+# Reglas de alerta de Prometheus para payment-processing (consistencia con card-limits y Kafka).
+# Las métricas salen de /actuator/prometheus (ConsistencyMonitor). Cargar con:
+#   rule_files:
+#     - payment-processing-alerts.yml
+# No hay Prometheus en el docker-compose del repo: este archivo es la referencia para el entorno que lo tenga.
+groups:
+  - name: payment-processing-consistency
+    rules:
+      - alert: CreditSagaOperationsStuck
+        # Operaciones PENDING con 5+ cancelaciones fallidas o de más de 15 min: el crédito en card-limits
+        # no coincide con los pagos hasta que se compensen
+        expr: max by (instance) (payment_credit_saga_stuck) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Saga de crédito: {{ $value }} operación(es) sin poder compensar"
+          description: >-
+            Hay operaciones de crédito cuyo pago no confirmó y que card-limits no acepta cancelar.
+            El disponible de esas tarjetas está mal. Revisar card-limits y
+            payment_credit_operations WHERE status = 'PENDING' ORDER BY attempts DESC.
+
+      - alert: CreditSagaCompensationsFailing
+        # Las compensaciones fallan sostenidamente (card-limits caído o rechazando las cancelaciones)
+        expr: sum by (instance) (increase(payment_credit_saga_compensations_total{result="failed"}[15m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Saga de crédito: compensaciones fallando"
+          description: "Más de 5 compensaciones fallidas en 15 min. ¿card-limits responde a POST /operations/{id}/cancel?"
+
+      - alert: CreditSagaCompensationLeftCardOverLimit
+        # Deshacer un reverso o una devolución que no se guardó volvió a consumir crédito ya gastado:
+        # es correcto, pero la tarjeta quedó por encima de su límite
+        expr: sum by (instance) (increase(payment_credit_saga_over_limit_total[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Saga de crédito: {{ $value }} compensación(es) dejaron una tarjeta excedida"
+          description: >-
+            Buscar en el log de payment-processing "left card ... over its limit" para ver la tarjeta y el monto.
+            Las compras siguientes de esa tarjeta se rechazan hasta que pague; puede requerir contacto con el cliente.
+
+      - alert: PaymentOutboxStalled
+        # Eventos pendientes de más de 5 min: el relay no logra publicar (Kafka caído o inaccesible)
+        expr: max by (instance) (payment_outbox_stalled) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox de pagos: {{ $value }} evento(s) sin publicar hace más de 5 min"
+          description: "Revisar la conexión a Kafka. Los eventos no se pierden: se publican cuando el broker vuelve."
+
+      - alert: PaymentOutboxEventsFailed
+        # Eventos con error permanente: no se reintentan y no llegan a los consumidores
+        expr: max by (instance) (payment_outbox_failed) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Outbox de pagos: {{ $value }} evento(s) con error permanente"
+          description: >-
+            Revisar payment_outbox_events WHERE failed_at IS NOT NULL (last_error). Para reintentar uno:
+            UPDATE payment_outbox_events SET failed_at = NULL WHERE id = ...

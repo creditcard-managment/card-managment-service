@@ -77,7 +77,8 @@ public interface RecalculateAvailableCreditUseCase {
 
     /**
      * @param outcome     qué pasó con la operación
-     * @param creditLimit el límite después de la cancelación
+     * @param creditLimit el límite después de la cancelación; {@link CreditLimit#getOverLimitAmount()} es mayor
+     *                    a cero si deshacer una restauración dejó la tarjeta excedida
      */
     record CancelOperationResult(
             CancelOutcome outcome,
