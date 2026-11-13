@@ -10,8 +10,6 @@ import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -152,25 +150,6 @@ public class TransactionEntity {
     @Column(name = "original_transaction_id")
     private UUID originalTransactionId;
 
-    // ========== Relationships ==========
-
-    @OneToMany(
-            mappedBy = "transaction",
-            cascade = CascadeType.ALL,
-            orphanRemoval = true,
-            fetch = FetchType.LAZY
-    )
-    @Builder.Default
-    private List<TransactionItemEntity> items = new ArrayList<>();
-
-    @OneToOne(
-            mappedBy = "transaction",
-            cascade = CascadeType.ALL,
-            orphanRemoval = true,
-            fetch = FetchType.LAZY
-    )
-    private TransactionReceiptEntity receipt;
-
     // ========== Audit Fields ==========
 
     @CreationTimestamp
@@ -189,27 +168,6 @@ public class TransactionEntity {
     private Integer version;
 
     // ========== Helper Methods ==========
-
-    public void addItem(TransactionItemEntity item) {
-        items.add(item);
-        item.setTransaction(this);
-    }
-
-    public void removeItem(TransactionItemEntity item) {
-        items.remove(item);
-        item.setTransaction(null);
-    }
-
-    public void setReceipt(TransactionReceiptEntity receipt) {
-        if (receipt == null) {
-            if (this.receipt != null) {
-                this.receipt.setTransaction(null);
-            }
-        } else {
-            receipt.setTransaction(this);
-        }
-        this.receipt = receipt;
-    }
 
     @PrePersist
     protected void onCreate() {

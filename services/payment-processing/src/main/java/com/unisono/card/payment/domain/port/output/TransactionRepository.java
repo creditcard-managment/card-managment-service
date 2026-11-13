@@ -55,27 +55,7 @@ public interface TransactionRepository {
     List<Transaction> findByCardIdAndDateRange(CardId cardId, LocalDateTime from, LocalDateTime to);
 
     /**
-     * Find transactions by status
-     */
-    List<Transaction> findByStatus(TransactionStatus status);
-
-    /**
      * Find transactions requiring settlement
      */
     List<Transaction> findPendingSettlement();
-
-    /**
-     * Find transactions created before a specific date
-     */
-    List<Transaction> findCreatedBefore(LocalDateTime date);
-
-    /**
-     * Check if transaction exists
-     */
-    boolean existsById(TransactionId transactionId);
-
-    /**
-     * Delete transaction (soft delete)
-     */
-    void delete(TransactionId transactionId);
 }

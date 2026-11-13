@@ -157,12 +157,6 @@
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
         </dependency>
 
-        <!-- Hypersistence Utils (for JSONB support) -->
-        <dependency>
-            <groupId>io.hypersistence</groupId>
-            <artifactId>hypersistence-utils-hibernate-63</artifactId>
-            <version>3.7.0</version>
-        </dependency>
         <!-- ========================================= -->
         <!-- TESTING -->
         <!-- ========================================= -->

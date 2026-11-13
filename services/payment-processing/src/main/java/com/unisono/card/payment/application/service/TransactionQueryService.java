@@ -55,18 +55,4 @@ public class TransactionQueryService implements QueryTransactionUseCase {
         log.debug("Finding transactions pending settlement");
         return transactionRepository.findPendingSettlement();
     }
-
-    @Override
-    public List<Transaction> findRequiringReversal() {
-        log.debug("Finding transactions requiring reversal");
-
-        // Find transactions older than 24 hours still in PENDING or AUTHORIZED status
-        LocalDateTime threshold = LocalDateTime.now().minusHours(24);
-        List<Transaction> oldPending = transactionRepository.findCreatedBefore(threshold);
-
-        return oldPending.stream()
-                .filter(t -> t.getStatus() == TransactionStatus.PENDING
-                        || t.getStatus() == TransactionStatus.AUTHORIZED)
-                .toList();
-    }
 }

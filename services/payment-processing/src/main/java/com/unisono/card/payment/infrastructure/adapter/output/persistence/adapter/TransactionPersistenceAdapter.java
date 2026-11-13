@@ -115,16 +115,6 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
     }
 
     @Override
-    public List<Transaction> findByStatus(TransactionStatus status) {
-        log.debug("Finding transactions with status: {}", status);
-
-        return jpaRepository.findByTransactionStatusOrderByTransactionDateDesc(status)
-                .stream()
-                .map(entityMapper::toDomain)
-                .collect(Collectors.toList());
-    }
-
-    @Override
     public List<Transaction> findPendingSettlement() {
         log.debug("Finding transactions pending settlement");
 
@@ -132,29 +122,5 @@ public class TransactionPersistenceAdapter implements TransactionRepository {
                 .stream()
                 .map(entityMapper::toDomain)
                 .collect(Collectors.toList());
-    }
-
-    @Override
-    public List<Transaction> findCreatedBefore(LocalDateTime date) {
-        log.debug("Finding transactions created before: {}", date);
-
-        return jpaRepository.findCreatedBefore(date)
-                .stream()
-                .map(entityMapper::toDomain)
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public boolean existsById(TransactionId transactionId) {
-        log.debug("Checking if transaction exists: {}", transactionId);
-
-        return jpaRepository.existsByTransactionId(transactionId.getValue());
-    }
-
-    @Override
-    public void delete(TransactionId transactionId) {
-        log.debug("Deleting transaction: {}", transactionId);
-
-        jpaRepository.deleteById(transactionId.getValue());
     }
 }

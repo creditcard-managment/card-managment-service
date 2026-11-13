@@ -8,7 +8,7 @@
 | Clase principal | `com.unisono.card.payment.PaymentApplication` |
 | Puerto | `8085` (`SERVER_PORT`), el mismo que en docker-compose |
 | Base paths REST | `/api/v1/payments`, `/api/v1/refunds`, `/api/v1/reversals`, `/api/v1/settlements`, `/api/v1/transactions` |
-| Base de datos | PostgreSQL — tablas `transactions`, `transaction_items`, `transaction_receipts`, `payment_outbox_events`, `payment_credit_operations`; lee `merchants` y `payment_terminals` |
+| Base de datos | PostgreSQL — tablas `transactions`, `payment_outbox_events`, `payment_credit_operations`; lee `merchants` y `payment_terminals` |
 | Mensajería | Kafka (productor, vía outbox) — topics `payment.*` |
 | Dependencias internas | `card-shared` (`Money`, `CardId`, `ExpirationDate`, …), `card-events` (`DomainEvent`) |
 | Integraciones REST | card-data, card-limits, servicio antifraude y autorizador (ver §7) |
@@ -47,8 +47,7 @@ com.unisono.card.payment
 │   │                CardData, MerchantInfo, AuthorizationCode,
 │   │                TransactionStatus, TransactionType, PaymentMethod
 │   ├── event        PaymentInitiated, PaymentAuthorized, PaymentProcessed, PaymentDeclined,
-│   │                PaymentReversed, RefundInitiated, RefundProcessed, TransactionSettled,
-│   │                TransactionCompleted, FraudDetected
+│   │                PaymentReversed, RefundInitiated, RefundProcessed, TransactionSettled
 │   ├── exception    PaymentException y subclases (§5.4)
 │   ├── port.input   ProcessPayment, ProcessRefund, ReverseTransaction,
 │   │                SettleTransactions, QueryTransaction
@@ -147,7 +146,6 @@ stateDiagram-v2
 | `decline(reason, declinedCode)` | No final y código declinado (≠ `"00"`) | `PaymentDeclined` |
 | `reverse(reason)` | `AUTHORIZED` o `APPROVED`; solo débitos (`PURCHASE`, `CASH_ADVANCE`), validado en `TransactionValidationService` | `PaymentReversed` |
 | `settle()` | `APPROVED` | `TransactionSettled` |
-| `complete()` | No final | `TransactionCompleted` |
 
 ### 3.3 Value Objects y enums
 
@@ -354,7 +352,7 @@ Respuesta **201** `PaymentResponse`:
   "responseMessage": "Transaction approved successfully", "riskScore": 10,
   "merchantId": "MERCH-001", "merchantName": "Supermercado Centro",
   "transactionDate": "2026-11-02T10:15:30", "authorizedAt": "2026-11-02T10:15:30",
-  "approved": true, "declineReason": null, "receiptNumber": null
+  "approved": true, "declineReason": null
 }
 ```
 
@@ -511,8 +509,6 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 | `RefundInitiated` | `payment.refund.initiated` | Al crear una devolución |
 | `RefundProcessed` | `payment.refund.processed` | `approveRefund()`: la devolución queda aprobada |
 | `TransactionSettled` | `payment.settlement.completed` | `settle()` |
-| `TransactionCompleted` | `payment.transaction.completed` | `complete()` (sin uso) |
-| `FraudDetected` | `payment.fraud.detected` | Nunca |
 
 **Productor:**
 
@@ -520,7 +516,7 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 - Key = **card id**: los eventos de una tarjeta (y de cada una de sus transacciones) quedan en la misma partición y en orden. Todos los eventos implementan `PaymentEvent` (`getCardId()`).
 - Payload: el JSON que serializa el `ObjectMapper` de Spring al guardar el evento. El relay lo envía tal cual.
 - `acks=all`, idempotente, 3 reintentos, `lz4`, `linger.ms=10`, sin type headers. Timeouts acotados (`request.timeout.ms=5000`, `delivery.timeout.ms=10000`, `max.block.ms=5000`) para que cada envío se resuelva antes de que el relay deje de esperar (`payment.outbox.send-timeout-ms=16000`).
-- `KafkaPaymentConfig` declara los 10 topics con **3 particiones** (`KAFKA_TOPIC_PARTITIONS`) y **replication factor 2** (`KAFKA_TOPIC_REPLICATION_FACTOR`). En docker-compose, con un solo broker, el factor es 1: si supera la cantidad de brokers, los topics no se crean al arrancar (`InvalidReplicationFactorException`).
+- `KafkaPaymentConfig` declara los 8 topics con **3 particiones** (`KAFKA_TOPIC_PARTITIONS`) y **replication factor 2** (`KAFKA_TOPIC_REPLICATION_FACTOR`). En docker-compose, con un solo broker, el factor es 1: si supera la cantidad de brokers, los topics no se crean al arrancar (`InvalidReplicationFactorException`).
 - Nadie consume todavía estos topics.
 
 ---
@@ -547,8 +543,7 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 
 **Tablas asociadas:**
 
-- **`transaction_items`:** detalle de ítems (descripción, cantidad, precio unitario, total).
-- **`transaction_receipts`:** comprobantes (`receipt_number` único `RCP-…`, tipo `DIGITAL|PRINTED|EMAIL|SMS`, `receipt_data` en **jsonb** vía hypersistence-utils, estado de entrega).
+- **`transaction_items`** (V6) y **`transaction_receipts`** (V7): ítems y comprobantes. Existen en la base, pero el servicio no las mapea ni las usa.
 
 **De solo lectura** (V4, las administra el módulo de comercios): `merchants` (`id`, `legal_name`, `trade_name`, `status`) y `payment_terminals` (`id`, `merchant_id`, `terminal_type`, `status`).
 
@@ -557,7 +552,7 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 - **`payment_outbox_events`:** igual que `outbox_events` de card-data (`event_id` único, `aggregate_id` = card id, `topic`, `event_type`, `payload` JSON, `created_at`, `published_at`, `failed_at`, `attempts`, `last_error`), con índices parciales de pendientes, publicados y fallidos. Para reintentar un fallido: `UPDATE payment_outbox_events SET failed_at = NULL WHERE id = …`.
 - **`payment_credit_operations`:** `operation_id` (PK, el que recibe card-limits), `transaction_id` (sin FK: la transacción puede no haberse guardado nunca), `card_id`, `operation_type` (`CONSUME_PURCHASE`, `CONSUME_CASH_ADVANCE`, `RESTORE`), `amount`, `currency`, `status` (`PENDING`, `CONFIRMED`, `REJECTED`, `COMPENSATED`), `attempts`, `last_error`, `created_at`, `updated_at`. Índice parcial de las `PENDING`. Una `PENDING` con muchos `attempts` indica que card-limits no responde a las cancelaciones.
 
-El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tiene consultas de estadísticas, sospechosas, duplicados y volumen por comercio, que tampoco se exponen.
+`JpaTransactionRepository` solo tiene las consultas que usa el servicio.
 
 ### 9.2 Configuración
 
@@ -599,8 +594,6 @@ El dominio no usa ítems ni comprobantes. `CustomTransactionRepositoryImpl` tien
 
 4. **Compensación sin revisión de fondos:** deshacer una restauración vuelve a consumir lo restaurado sin validar límites, así que el disponible puede quedar por debajo de lo que permitiría una compra nueva. Si la compensación ocurre otro día (u otro mes), el cupo diario (o mensual) ya se reseteó y no se vuelve a tocar.
 5. **Compensación sin alertas:** una operación que no se puede cancelar (card-limits caído) queda `PENDING` y se reintenta sin límite. Solo se ve en el log y en `payment_credit_operations.attempts`; no hay métrica ni alerta. Lo mismo pasa con los eventos fallidos del outbox.
-6. **Código sin uso:** `QueryTransactionRequest`, ítems y comprobantes, `CustomTransactionRepository`, la mayoría de las consultas de `JpaTransactionRepository`, `findRequiringReversal`, `complete()`, `FraudDetected`, y `PaymentResponse.receiptNumber` (siempre `null`).
-7. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
-8. **Moneda por defecto `USD`** en resúmenes y liquidaciones vacías, mientras el resto del sistema solo opera en ARS ([LIMITS.md §9.1](LIMITS.md)).
-9. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
-10. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. También de `TransactionReversalService`, `PreAuthorizationExpiryService`, la saga (`SagaCreditLimitPort`, compensador y reconciliador) y el outbox (publisher, relay y limpieza). Faltan los de controllers, persistencia (incluido el mapper por reflexión, el lock y las consultas nuevas) y `RefundApplicationService`.
+6. **Reconstrucción por reflexión:** `TransactionEntityMapper.toDomain` usa el constructor privado y `setField` por nombre. Es frágil ante renombres.
+7. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
+8. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. También de `TransactionReversalService`, `PreAuthorizationExpiryService`, la saga (`SagaCreditLimitPort`, compensador y reconciliador) y el outbox (publisher, relay y limpieza). Faltan los de controllers, persistencia (incluido el mapper por reflexión, el lock y las consultas nuevas) y `RefundApplicationService`.
