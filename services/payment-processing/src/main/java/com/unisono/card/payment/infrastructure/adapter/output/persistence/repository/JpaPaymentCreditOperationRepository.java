@@ -40,4 +40,12 @@ public interface JpaPaymentCreditOperationRepository extends JpaRepository<Payme
                        @Param("now") LocalDateTime now);
 
     long countByStatus(PaymentCreditOperationEntity.Status status);
+
+    /**
+     * Operaciones PENDING trabadas: con al menos {@code attempts} intentos de compensación fallidos,
+     * o creadas antes de {@code before}. Necesitan revisión (card-limits no responde a las cancelaciones)
+     */
+    @Query("SELECT COUNT(o) FROM PaymentCreditOperationEntity o WHERE o.status = 'PENDING' " +
+            "AND (o.attempts >= :attempts OR o.createdAt < :before)")
+    long countStuck(@Param("attempts") int attempts, @Param("before") LocalDateTime before);
 }

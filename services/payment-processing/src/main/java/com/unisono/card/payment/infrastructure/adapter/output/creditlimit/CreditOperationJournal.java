@@ -88,13 +88,18 @@ public class CreditOperationJournal {
         });
     }
 
+    /**
+     * @return intentos de compensación acumulados (0 si la operación ya no está PENDING)
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markCompensationFailed(String operationId, String error) {
-        repository.findById(operationId).ifPresent(operation -> {
-            if (operation.getStatus() == Status.PENDING) {
-                operation.markCompensationFailed(error);
-            }
-        });
+    public int markCompensationFailed(String operationId, String error) {
+        return repository.findById(operationId)
+                .filter(operation -> operation.getStatus() == Status.PENDING)
+                .map(operation -> {
+                    operation.markCompensationFailed(error);
+                    return operation.getAttempts();
+                })
+                .orElse(0);
     }
 
     private void resolve(String operationId, Status status) {

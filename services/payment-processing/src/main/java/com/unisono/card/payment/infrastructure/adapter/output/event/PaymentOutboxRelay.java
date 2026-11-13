@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.adapter.output.event;
 
+import com.unisono.card.payment.infrastructure.observability.ConsistencyMonitor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.PaymentOutboxEventEntity;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.repository.JpaPaymentOutboxEventRepository;
@@ -37,6 +38,7 @@ public class PaymentOutboxRelay {
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
+    private final ConsistencyMonitor monitor;
 
     @Value("${payment.outbox.batch-size:50}")
     private int batchSize;
@@ -51,8 +53,10 @@ public class PaymentOutboxRelay {
             JpaPaymentOutboxEventRepository repository,
             KafkaTemplate<String, Object> kafkaTemplate,
             ObjectMapper objectMapper,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            ConsistencyMonitor monitor
     ) {
+        this.monitor = monitor;
         this.repository = repository;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
@@ -91,11 +95,13 @@ public class PaymentOutboxRelay {
                 String error = describe(e);
                 if (isTransient(e)) {
                     event.markFailed(error);
+                    monitor.outboxPublishFailed(true);
                     log.error("❌ Payment outbox: failed to publish event {} ({}) to '{}', attempt {}, will retry: {}",
                             event.getEventId(), event.getEventType(), event.getTopic(), event.getAttempts(), error);
                     break;
                 }
                 event.markDead(error);
+                monitor.outboxPublishFailed(false);
                 log.error("☠️ Payment outbox: event {} ({}) to '{}' failed permanently and will not be retried: {}",
                         event.getEventId(), event.getEventType(), event.getTopic(), error);
             }

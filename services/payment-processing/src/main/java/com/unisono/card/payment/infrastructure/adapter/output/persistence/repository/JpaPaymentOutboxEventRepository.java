@@ -31,4 +31,11 @@ public interface JpaPaymentOutboxEventRepository extends JpaRepository<PaymentOu
     int deletePublishedBefore(@Param("before") LocalDateTime before);
 
     long countByFailedAtIsNotNull();
+
+    long countByPublishedAtIsNullAndFailedAtIsNull();
+
+    /**
+     * Pendientes de publicar creados antes de {@code before}: el relay no logra publicarlos (broker caído)
+     */
+    long countByPublishedAtIsNullAndFailedAtIsNullAndCreatedAtBefore(LocalDateTime before);
 }

@@ -129,6 +129,9 @@ payment:
     send-timeout-ms: 16000
     retention-days: 7
     cleanup-cron: "0 0 3 * * *"
+    alerts:
+      # Un evento pendiente más viejo que esto cuenta como atascado (payment.outbox.stalled)
+      stalled-after-minutes: 5
   # Saga de crédito: compensa en card-limits las operaciones cuyo pago no confirmó
   credit-saga:
     reconciler:
@@ -138,6 +141,15 @@ payment:
       # Antigüedad mínima de una operación PENDING para compensarla (más que el timeout de las llamadas REST)
       stale-after-seconds: 60
       batch-size: 20
+    # Una operación PENDING cuenta como trabada (payment.credit_saga.stuck, health DEGRADED) con estos
+    # intentos de compensación fallidos o con esta antigüedad
+    alerts:
+      stuck-after-attempts: 5
+      stuck-after-minutes: 15
+  # Cada cuánto se recalculan los gauges de consistencia (consultas a la base)
+  observability:
+    refresh-initial-delay-ms: 15000
+    refresh-interval-ms: 30000
   pre-authorization:
     expiration-hours: ${PRE_AUTHORIZATION_EXPIRATION_HOURS:168}  # 7 días
     expiry:
@@ -153,9 +165,15 @@ management:
   endpoint:
     health:
       show-details: when-authorized
-  metrics:
-    export:
-      prometheus:
+      # DEGRADED: hay operaciones de crédito trabadas o eventos atascados (ConsistencyHealthIndicator).
+      # Responde 200 para que un orquestador no reinicie el servicio por eso
+      status:
+        order: DOWN,OUT_OF_SERVICE,DEGRADED,UP,UNKNOWN
+        http-mapping:
+          DEGRADED: 200
+  prometheus:
+    metrics:
+      export:
         enabled: true
 
 # Logging Configuration

@@ -69,6 +69,7 @@ com.unisono.card.payment
     │                        merchant (JPA de solo lectura);
     │                        event: outbox (OutboxPaymentEventPublisher, PaymentOutboxRelay, PaymentOutboxCleaner);
     │                        persistence (JPA)
+    ├── observability        ConsistencyMonitor (métricas de la saga y del outbox), ConsistencyHealthIndicator
     └── config               DatabaseConfig (DataSource + EMF + TxManager propios),
                              KafkaPaymentConfig, RestTemplateConfig, BeanConfig, OpenApiConfig, SchedulingConfig
 ```
@@ -576,7 +577,12 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 | `payment.outbox.retention-days` · `.cleanup-cron` | `7` · `0 0 3 * * *` | Limpieza de publicados |
 | `payment.credit-saga.reconciler.enabled` · `.interval-ms` | `${PAYMENT_CREDIT_SAGA_RECONCILER_ENABLED:true}` · `${PAYMENT_CREDIT_SAGA_RECONCILER_INTERVAL_MS:30000}` | Reconciliador de la saga |
 | `payment.credit-saga.reconciler.stale-after-seconds` · `.batch-size` · `.initial-delay-ms` | `60` · `20` · `30000` | Antigüedad mínima para compensar una `PENDING`; tiene que superar el timeout de las llamadas REST (10 s) |
+| `payment.credit-saga.alerts.stuck-after-attempts` · `.stuck-after-minutes` | `5` · `15` | Cuándo una operación `PENDING` cuenta como trabada (§9.4) |
+| `payment.outbox.alerts.stalled-after-minutes` | `5` | Cuándo un evento pendiente cuenta como atascado |
+| `payment.observability.refresh-interval-ms` · `.refresh-initial-delay-ms` | `30000` · `15000` | Recálculo de los gauges de consistencia |
 | `management.endpoint.health.show-details` | `when-authorized` | |
+| `management.endpoint.health.status.order` · `.http-mapping.DEGRADED` | `DOWN,OUT_OF_SERVICE,DEGRADED,UP,UNKNOWN` · `200` | Estado `DEGRADED` de §9.4 |
+| `management.prometheus.metrics.export.enabled` | `true` | `/actuator/prometheus` |
 
 `DatabaseConfig` define `paymentDataSource` (Hikari, pool de 20, `autoCommit=false`), `paymentEntityManagerFactory` y `paymentTransactionManager` propios.
 
@@ -587,6 +593,28 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 ### 9.3 Docker
 
 `services/payment-processing/Dockerfile` (multi-stage) y servicio `payment-processing-service` en compose (sin perfil: toda la configuración está en `application.yml`; los perfiles opcionales son `dev` y `prod`): puerto `8085`, `KAFKA_BOOTSTRAP_SERVERS=kafka:9092`, `depends_on: kafka`, `CARD_DATA_SERVICE_URL=http://card-data-service:8081` y `CARD_LIMITS_SERVICE_URL=http://card-limits-service:8082`. Las URLs de antifraude y autorizador quedan en sus defaults de `localhost`.
+
+
+### 9.4 Observabilidad de la consistencia
+
+`ConsistencyMonitor` publica en `/actuator/prometheus` el estado de la saga de crédito (§4.7) y del outbox. Los gauges se recalculan cada 30 s con consultas a la base, no en cada scrape:
+
+| Métrica | Tipo | Qué mide |
+|---|---|---|
+| `payment_credit_saga_pending` | gauge | Operaciones de crédito `PENDING`: pagos que no confirmaron y todavía no se compensaron |
+| `payment_credit_saga_stuck` | gauge | `PENDING` con 5 o más cancelaciones fallidas, o de más de 15 min. **El disponible en card-limits está mal hasta que se compensen** |
+| `payment_credit_saga_compensations_total{result, source}` | contador | Compensaciones: `result` = `compensated` / `failed`; `source` = `immediate` (al deshacerse la transacción) / `reconciler` |
+| `payment_outbox_pending` | gauge | Eventos sin publicar |
+| `payment_outbox_stalled` | gauge | Eventos sin publicar de más de 5 min (Kafka inaccesible) |
+| `payment_outbox_failed` | gauge | Eventos con error permanente (no se reintentan) |
+| `payment_outbox_publish_failures_total{kind}` | contador | Envíos fallidos: `transient` / `permanent` |
+
+Además:
+
+- **Health `paymentConsistency`** (`/actuator/health`): `UP`, o **`DEGRADED`** si hay operaciones trabadas o eventos atascados o fallidos, con los conteos en el detalle. `DEGRADED` responde **200**: el servicio sigue atendiendo y un reinicio no arregla el problema, así que no conviene que un orquestador lo reinicie.
+- **Log:** cada refresco con operaciones trabadas o eventos atascados escribe un `ERROR` (🚨). Cuando una operación llega a 5 intentos fallidos, se loguea una vez que necesita revisión.
+- Las operaciones trabadas se siguen reintentando sin límite: la alerta avisa, pero la resolución depende de que card-limits vuelva a responder o de una revisión manual.
+- **Reglas de alerta de ejemplo** para Prometheus en `deploy/prometheus/payment-processing-alerts.yml`, validadas con `promtool`: `CreditSagaOperationsStuck` (critical), `CreditSagaCompensationsFailing`, `PaymentOutboxStalled` y `PaymentOutboxEventsFailed` (critical). El docker-compose no incluye Prometheus.
 
 ---
 
@@ -601,6 +629,6 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 ### 10.2 Técnicas
 
 4. **Compensación sin revisión de fondos:** deshacer una restauración vuelve a consumir lo restaurado sin validar límites, así que el disponible puede quedar por debajo de lo que permitiría una compra nueva. Si la compensación ocurre otro día (u otro mes), el cupo diario (o mensual) ya se reseteó y no se vuelve a tocar.
-5. **Compensación sin alertas:** una operación que no se puede cancelar (card-limits caído) queda `PENDING` y se reintenta sin límite. Solo se ve en el log y en `payment_credit_operations.attempts`; no hay métrica ni alerta. Lo mismo pasa con los eventos fallidos del outbox.
+5. **Versiones de Spring Boot mezcladas:** el parent es Spring Boot 3.2.1, pero el BOM importado (`spring-boot.version`) es 3.3.5, así que Micrometer, Hibernate y otras librerías quedan en versiones de 3.3 con los jars de Boot 3.2. Por eso las métricas usan `micrometer-registry-prometheus-simpleclient`: el autoconfig de Boot 3.2 no detecta el registry nuevo. Alinear las dos versiones es un cambio de todo el repo.
 6. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización). El PIN de los adelantos ya viaja cifrado (PIN block), pero la clave de cifrado de PIN es una sola por configuración, sin HSM ni DUKPT (una clave por transacción). Entre servicios no hay TLS ni autenticación.
 7. **Sin tests de punta a punta:** hay tests unitarios de dominio, servicios de aplicación (incluido `RefundApplicationService`), adapters, saga, outbox y los cinco controllers (MockMvc con los mappers y el `GlobalExceptionHandler` reales). La persistencia se prueba contra PostgreSQL con Testcontainers (`TransactionPersistenceTest`, `OutboxAndCreditOperationQueriesTest`): mapeo, `@Version`, consultas, el lock de `findByIdForUpdate` y los `FOR UPDATE SKIP LOCKED` del relay y del reconciliador. Ese esquema lo genera Hibernate, no las migraciones de `card-management-database`. Falta un test con el contexto completo de Spring, Kafka, card-data y card-limits.

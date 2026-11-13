@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.adapter.output.event;
 
+import com.unisono.card.payment.infrastructure.observability.ConsistencyMonitor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.PaymentOutboxEventEntity;
@@ -45,12 +46,15 @@ class PaymentOutboxRelayTest {
     @Mock
     private PlatformTransactionManager transactionManager;
 
+    @Mock
+    private ConsistencyMonitor monitor;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private PaymentOutboxRelay relay;
 
     @BeforeEach
     void setUp() {
-        relay = new PaymentOutboxRelay(repository, kafkaTemplate, objectMapper, transactionManager);
+        relay = new PaymentOutboxRelay(repository, kafkaTemplate, objectMapper, transactionManager, monitor);
         ReflectionTestUtils.setField(relay, "batchSize", 50);
         ReflectionTestUtils.setField(relay, "sendTimeoutMs", 1000L);
     }
@@ -104,6 +108,7 @@ class PaymentOutboxRelayTest {
         // El segundo no se envía para no publicar fuera de orden
         verify(kafkaTemplate, never()).send(anyString(), eq("card-2"), any());
         assertThat(second.getAttempts()).isZero();
+        verify(monitor).outboxPublishFailed(true);
     }
 
     @Test
@@ -123,6 +128,7 @@ class PaymentOutboxRelayTest {
         assertThat(tooLarge.getPublishedAt()).isNull();
         assertThat(tooLarge.getLastError()).contains("RecordTooLargeException");
         assertThat(next.getPublishedAt()).isNotNull();
+        verify(monitor).outboxPublishFailed(false);
     }
 
     @Test

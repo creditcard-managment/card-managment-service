@@ -145,6 +145,38 @@ class OutboxAndCreditOperationQueriesTest extends PostgresPersistenceTest {
         assertThat(stillCompensated).isEqualTo(1);
     }
 
+    @Test
+    void shouldCountStuckOperationsByAttemptsOrAge() {
+        PaymentCreditOperationEntity manyAttempts = operation(Status.PENDING, 1);
+        manyAttempts.setAttempts(5);
+        PaymentCreditOperationEntity old = operation(Status.PENDING, 30);
+        PaymentCreditOperationEntity recent = operation(Status.PENDING, 1);
+        PaymentCreditOperationEntity oldButCompensated = operation(Status.COMPENSATED, 30);
+        oldButCompensated.setAttempts(9);
+        tx.executeWithoutResult(s -> operations.saveAll(List.of(manyAttempts, old, recent, oldButCompensated)));
+
+        Long stuck = tx.execute(s -> operations.countStuck(5, LocalDateTime.now().minusMinutes(15)));
+
+        assertThat(stuck).isEqualTo(2);
+    }
+
+    @Test
+    void shouldCountPendingAndStalledEvents() {
+        PaymentOutboxEventEntity stalled = event();
+        stalled.setCreatedAt(LocalDateTime.now().minusMinutes(10));
+        PaymentOutboxEventEntity published = event();
+        published.setCreatedAt(LocalDateTime.now().minusMinutes(10));
+        published.setPublishedAt(LocalDateTime.now());
+        tx.executeWithoutResult(s -> outbox.saveAll(List.of(stalled, published, event())));
+
+        Long pending = tx.execute(s -> outbox.countByPublishedAtIsNullAndFailedAtIsNull());
+        Long stalledCount = tx.execute(s -> outbox.countByPublishedAtIsNullAndFailedAtIsNullAndCreatedAtBefore(
+                LocalDateTime.now().minusMinutes(5)));
+
+        assertThat(pending).isEqualTo(2);
+        assertThat(stalledCount).isEqualTo(1);
+    }
+
     private static PaymentOutboxEventEntity event() {
         String id = UUID.randomUUID().toString();
         return PaymentOutboxEventEntity.builder()
