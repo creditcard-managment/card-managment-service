@@ -23,19 +23,13 @@ spring:
   flyway:
     enabled: false
 
-  # ✅ CONFIGURACIÓN DE KAFKA CONSUMER
+  # Kafka: solo se leen bootstrap-servers y group-id. El consumidor lo arma KafkaConsumerConfig
+  # (StringDeserializer + conversión a mano, auto-offset-reset earliest, ack MANUAL, reintentos y DLQ):
+  # no agregar acá deserializers ni propiedades spring.json.*, porque no se aplican
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
       group-id: card-lifecycle-consumer-group
-      auto-offset-reset: earliest
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "com.unisono.card.events.domain"
-        spring.json.value.default.type: "com.unisono.card.events.domain.CardCreatedEvent"
-    listener:
-      ack-mode: manual
 
 # Reintentos del consumidor antes de enviar un mensaje a dlq.card-events (1 s, 2 s, 4 s, 8 s)
 card-lifecycle:

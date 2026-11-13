@@ -245,6 +245,23 @@ class CardStatusEndpointsTest {
     }
 
     @Test
+    void shouldEnqueueExpiredEventAndRecordWhenItExpired() throws Exception {
+        putJson("/status", "{\"status\":\"APPROVED\"}").andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"ISSUED\"}").andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"ACTIVE\"}").andExpect(status().isOk());
+        putJson("/status", "{\"status\":\"EXPIRED\",\"reason\":\"Vencimiento\",\"performedBy\":\"batch\"}")
+                .andExpect(status().isOk());
+
+        assertThat(outbox).extracting(EnqueuedEvent::topic).endsWith(KafkaTopics.CARD_EXPIRED);
+        CardExpiredEvent expired = eventAt(outbox.size() - 1);
+        assertThat(expired.getCardId()).isEqualTo(cardId);
+        assertThat(expired.getReason()).isEqualTo("Vencimiento");
+        assertThat(expired.getExpiredBy()).isEqualTo("batch");
+        assertThat(expired.getExpiredAt()).isNotNull();
+        assertThat(storedCard().getExpiredAt()).isEqualTo(expired.getExpiredAt());
+    }
+
+    @Test
     void shouldEnqueueRejectedEvent() throws Exception {
         putJson("/status", "{\"status\":\"REJECTED\",\"reason\":\"No califica\",\"performedBy\":\"admin\"}")
                 .andExpect(status().isOk());

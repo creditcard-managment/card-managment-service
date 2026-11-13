@@ -32,6 +32,7 @@ class EventContractTest {
                 new CardBlockedEvent(CARD_ID, "FRAUD", AT, "Fraude", "antifraude"),
                 new CardUnblockedEvent(CARD_ID, AT, "Recuperada", "admin"),
                 new CardCancelledEvent(CARD_ID, AT, "Baja", "cliente"),
+                new CardExpiredEvent(CARD_ID, AT, "Vencimiento del plástico", "system"),
                 new CreditLimitAssignedEvent(CARD_ID, new BigDecimal("150000.50"), new BigDecimal("30000.10"), "ARS", "admin"),
                 new CreditLimitUpdatedEvent(CARD_ID, new BigDecimal("100.00"), new BigDecimal("200.00"), "ARS", "Aumento", "admin"),
                 new CreditLimitConsumedEvent(CARD_ID, "tx-1", new BigDecimal("10.25"), new BigDecimal("89.75"), "ARS")

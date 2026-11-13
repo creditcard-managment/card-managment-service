@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.adapter.output.event;
 
+import com.unisono.card.events.config.KafkaTopics;
 import com.unisono.card.events.domain.DomainEvent;
 import com.unisono.card.payment.domain.event.*;
 import lombok.extern.slf4j.Slf4j;
@@ -13,31 +14,31 @@ import org.springframework.stereotype.Component;
 @Component
 public class PaymentEventTopicResolver {
 
-    @Value("${spring.kafka.topics.payment.initiated:payment.processing.initiated}")
+    @Value("${spring.kafka.topics.payment.initiated:" + KafkaTopics.PAYMENT_INITIATED + "}")
     private String paymentInitiatedTopic;
 
-    @Value("${spring.kafka.topics.payment.authorized:payment.processing.authorized}")
+    @Value("${spring.kafka.topics.payment.authorized:" + KafkaTopics.PAYMENT_AUTHORIZED + "}")
     private String paymentAuthorizedTopic;
 
-    @Value("${spring.kafka.topics.payment.processed:payment.processing.completed}")
+    @Value("${spring.kafka.topics.payment.processed:" + KafkaTopics.PAYMENT_PROCESSED + "}")
     private String paymentProcessedTopic;
 
-    @Value("${spring.kafka.topics.payment.declined:payment.processing.declined}")
+    @Value("${spring.kafka.topics.payment.declined:" + KafkaTopics.PAYMENT_DECLINED + "}")
     private String paymentDeclinedTopic;
 
-    @Value("${spring.kafka.topics.payment.reversed:payment.reversal.completed}")
+    @Value("${spring.kafka.topics.payment.reversed:" + KafkaTopics.PAYMENT_REVERSED + "}")
     private String paymentReversedTopic;
 
-    @Value("${spring.kafka.topics.refund.initiated:payment.refund.initiated}")
+    @Value("${spring.kafka.topics.refund.initiated:" + KafkaTopics.REFUND_INITIATED + "}")
     private String refundInitiatedTopic;
 
-    @Value("${spring.kafka.topics.refund.processed:payment.refund.processed}")
+    @Value("${spring.kafka.topics.refund.processed:" + KafkaTopics.REFUND_PROCESSED + "}")
     private String refundProcessedTopic;
 
-    @Value("${spring.kafka.topics.transaction.settled:payment.settlement.completed}")
+    @Value("${spring.kafka.topics.transaction.settled:" + KafkaTopics.TRANSACTION_SETTLED + "}")
     private String transactionSettledTopic;
 
-    @Value("${spring.kafka.topics.payment.default:payment.events}")
+    @Value("${spring.kafka.topics.payment.default:" + KafkaTopics.PAYMENT_DEFAULT + "}")
     private String defaultTopic;
 
     /**

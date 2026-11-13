@@ -167,6 +167,10 @@ public class Card {
         validateTransitionTo(newStatus);
         this.status = newStatus;
         this.updatedAt = LocalDateTime.now();
+        if (newStatus == CardStatus.EXPIRED && this.expiredAt == null) {
+            // Igual que expire(): el vencimiento por PUT /status también registra cuándo ocurrió
+            this.expiredAt = this.updatedAt;
+        }
     }
 
     public void setActivatedAt(LocalDateTime activatedAt) {
