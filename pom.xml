@@ -8,7 +8,10 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.2.1</version>
+        <!-- Única fuente de versiones de Spring Boot y de las librerías que gestiona (Spring, Hibernate, Kafka,
+             Micrometer, PostgreSQL, Lombok, JUnit, Mockito, Testcontainers...). No redefinir aquí propiedades con
+             sus nombres (spring-kafka.version, mockito.version, ...): pisan la versión que gestiona Boot -->
+        <version>3.3.5</version>
         <relativePath/>
     </parent>
 
@@ -26,35 +29,22 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <spring-kafka.version>3.1.2</spring-kafka.version>
         <!-- Spring Boot -->
-        <spring-boot.version>3.3.5</spring-boot.version>
 
         <!-- Database -->
-        <postgresql.version>42.7.1</postgresql.version>
-        <hikari.version>5.1.0</hikari.version>
 
         <!-- Security -->
         <bcprov.version>1.77</bcprov.version>
-        <spring-security-crypto.version>6.2.1</spring-security-crypto.version>
 
         <!-- Utilities -->
-        <lombok.version>1.18.30</lombok.version>
-        <commons-lang3.version>3.14.0</commons-lang3.version>
         <mapstruct.version>1.5.5.Final</mapstruct.version>
 
         <!-- Validation -->
-        <jakarta-validation.version>3.0.2</jakarta-validation.version>
 
         <!-- OpenAPI/Swagger -->
-        <springdoc-openapi.version>2.3.0</springdoc-openapi.version>
+        <springdoc-openapi.version>2.6.0</springdoc-openapi.version>
 
         <!-- Testing -->
-        <junit.version>5.14.1</junit.version>
-        <assertj.version>3.25.3</assertj.version>
-        <mockito.version>5.20.0</mockito.version>
-        <testcontainers.version>1.20.4</testcontainers.version>
-        <awaitility.version>4.2.2</awaitility.version>
 
         <!-- Plugins -->
         <maven-compiler-plugin.version>3.12.1</maven-compiler-plugin.version>
@@ -106,35 +96,9 @@
                 <artifactId>payment-processing</artifactId>
                 <version>${project.version}</version>
             </dependency>
-            <!-- Spring Boot BOM -->
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring-boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
 
-            <!-- PostgreSQL -->
-            <dependency>
-                <groupId>org.postgresql</groupId>
-                <artifactId>postgresql</artifactId>
-                <version>${postgresql.version}</version>
-            </dependency>
 
-            <!-- HikariCP (connection pool) -->
-            <dependency>
-                <groupId>com.zaxxer</groupId>
-                <artifactId>HikariCP</artifactId>
-                <version>${hikari.version}</version>
-            </dependency>
 
-            <!-- Kafka -->
-            <dependency>
-                <groupId>org.springframework.kafka</groupId>
-                <artifactId>spring-kafka</artifactId>
-                <version>${spring-kafka.version}</version>
-            </dependency>
 
             <!-- Bouncy Castle (Encriptación) -->
             <dependency>
@@ -143,27 +107,8 @@
                 <version>${bcprov.version}</version>
             </dependency>
 
-            <!-- Spring Security Crypto -->
-            <dependency>
-                <groupId>org.springframework.security</groupId>
-                <artifactId>spring-security-crypto</artifactId>
-                <version>${spring-security-crypto.version}</version>
-            </dependency>
 
-            <!-- Lombok -->
-            <dependency>
-                <groupId>org.projectlombok</groupId>
-                <artifactId>lombok</artifactId>
-                <version>${lombok.version}</version>
-                <scope>provided</scope>
-            </dependency>
 
-            <!-- Apache Commons Lang -->
-            <dependency>
-                <groupId>org.apache.commons</groupId>
-                <artifactId>commons-lang3</artifactId>
-                <version>${commons-lang3.version}</version>
-            </dependency>
 
             <!-- MapStruct (mapeo DTO <-> Entity) -->
             <dependency>
@@ -178,12 +123,6 @@
                 <scope>provided</scope>
             </dependency>
 
-            <!-- Jakarta Validation -->
-            <dependency>
-                <groupId>jakarta.validation</groupId>
-                <artifactId>jakarta.validation-api</artifactId>
-                <version>${jakarta-validation.version}</version>
-            </dependency>
 
             <!-- SpringDoc OpenAPI (Swagger) -->
             <dependency>
@@ -192,44 +131,10 @@
                 <version>${springdoc-openapi.version}</version>
             </dependency>
 
-            <!-- Testing -->
-            <dependency>
-                <groupId>org.assertj</groupId>
-                <artifactId>assertj-core</artifactId>
-                <version>${assertj.version}</version>
-                <scope>test</scope>
-            </dependency>
 
-            <dependency>
-                <groupId>org.mockito</groupId>
-                <artifactId>mockito-core</artifactId>
-                <version>${mockito.version}</version>
-                <scope>test</scope>
-            </dependency>
 
-            <dependency>
-                <groupId>org.mockito</groupId>
-                <artifactId>mockito-junit-jupiter</artifactId>
-                <version>${mockito.version}</version>
-                <scope>test</scope>
-            </dependency>
 
-            <!-- Testcontainers (para tests de integración con Postgres/Kafka reales) -->
-            <dependency>
-                <groupId>org.testcontainers</groupId>
-                <artifactId>testcontainers-bom</artifactId>
-                <version>${testcontainers.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
 
-            <!-- Awaitility (testing asíncrono) -->
-            <dependency>
-                <groupId>org.awaitility</groupId>
-                <artifactId>awaitility</artifactId>
-                <version>${awaitility.version}</version>
-                <scope>test</scope>
-            </dependency>
 
             <dependency>
                 <groupId>junit</groupId>
@@ -248,7 +153,6 @@
             <dependency>
                 <groupId>org.junit.vintage</groupId>
                 <artifactId>junit-vintage-engine</artifactId>
-                <version>${junit.version}</version>
                 <scope>test</scope>
                 <exclusions>
                     <exclusion>

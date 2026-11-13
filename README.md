@@ -632,10 +632,12 @@ if (!resetMonth.equals(YearMonth.now())) {
 
 ### Backend
 - **Java 17** - LTS version
-- **Spring Boot 3.4.1** - Framework principal
+- **Spring Boot 3.3.5** - Framework principal (Spring Framework 6.1, Spring Data JPA 3.3, Hibernate 6.5, Spring Kafka 3.2, Micrometer 1.13)
 - **Spring Data JPA** - Persistencia
 - **Hibernate** - ORM
 - **Maven** - Gestión de dependencias
+
+> **Versiones:** el `spring-boot-starter-parent` del `pom.xml` raíz es la única fuente de versiones de Spring Boot y de todo lo que gestiona (Spring, Hibernate, Kafka, Micrometer, Jackson, PostgreSQL, Lombok, JUnit, Mockito, Testcontainers). No se importa otro BOM de Boot ni se redefinen sus propiedades (`spring-kafka.version`, `mockito.version`, …), porque pisan la versión gestionada. Solo se fijan versiones de lo que Boot no gestiona: MapStruct, springdoc, Bouncy Castle y Spring State Machine.
 
 ### Base de Datos
 - **PostgreSQL 16** - Base de datos relacional
