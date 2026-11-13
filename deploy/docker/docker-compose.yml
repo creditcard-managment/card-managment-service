@@ -181,7 +181,6 @@ services:
       dockerfile: services/payment-processing/Dockerfile
     container_name: payment-processing-service
     environment:
-      SPRING_PROFILES_ACTIVE: payment
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres

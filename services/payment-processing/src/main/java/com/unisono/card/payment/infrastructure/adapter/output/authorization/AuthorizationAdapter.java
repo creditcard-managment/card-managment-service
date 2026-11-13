@@ -24,7 +24,7 @@ public class AuthorizationAdapter implements AuthorizationPort {
 
     private final RestTemplate restTemplate;
 
-    @Value("${services.authorization.url:http://localhost:8082}")
+    @Value("${services.authorization.url:http://localhost:8087}")
     private String authorizationServiceUrl;
 
     @Value("${authorization.timeout-ms:3000}")
