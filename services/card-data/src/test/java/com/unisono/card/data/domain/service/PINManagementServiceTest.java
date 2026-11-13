@@ -1,5 +1,9 @@
 package com.unisono.card.data.domain.service;
 
+import com.unisono.card.data.infrastructure.adapter.output.encryption.PinBlockAdapter;
+import com.unisono.card.data.infrastructure.config.PinEncryptionProperties;
+import com.unisono.card.shared.infrastructure.security.InvalidPinBlockException;
+import com.unisono.card.shared.infrastructure.security.Iso9564Format4PinBlock;
 import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.data.domain.model.CardCategory;
 import com.unisono.card.data.domain.model.CardHolder;
@@ -51,12 +55,18 @@ class PINManagementServiceTest {
     @Mock
     private EventOutboxPort eventOutbox;
 
+    private static final String PIN_KEY_ID = "pek-v1";
+    private static final byte[] PIN_KEY = java.util.HexFormat.of().parseHex("00112233445566778899AABBCCDDEEFF");
+
     private PINManagementService service;
     private Card card;
 
     @BeforeEach
     void setUp() {
-        service = new PINManagementService(cardRepository, encryptionPort, new CardEventEmitter(eventOutbox));
+        PinEncryptionProperties pinKeys = new PinEncryptionProperties();
+        pinKeys.getKeys().put(PIN_KEY_ID, java.util.Base64.getEncoder().encodeToString(PIN_KEY));
+        service = new PINManagementService(cardRepository, encryptionPort, new CardEventEmitter(eventOutbox),
+                new PinBlockAdapter(pinKeys));
         card = activeCardWithPin();
         lenient().when(cardRepository.findById(card.getId())).thenReturn(Optional.of(card));
         lenient().when(cardRepository.save(any(Card.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -98,6 +108,42 @@ class PINManagementServiceTest {
 
         assertThat(card.getPinFailedAttempts()).isZero();
         assertThat(card.getStatus()).isEqualTo(CardStatus.ACTIVE);
+    }
+
+    @Test
+    void shouldValidateAPinSentAsAPinBlock() {
+        String block = Iso9564Format4PinBlock.encrypt(CORRECT_PIN, card.getCardNumber().getValue(), PIN_KEY);
+
+        assertThat(service.execute(ValidatePINCommand.ofPinBlock(card.getId(), block, PIN_KEY_ID))).isTrue();
+        verify(encryptionPort).verifyHash(CORRECT_PIN, PIN_HASH);
+    }
+
+    @Test
+    void shouldCountAWrongPinSentAsAPinBlock() {
+        String block = Iso9564Format4PinBlock.encrypt(WRONG_PIN, card.getCardNumber().getValue(), PIN_KEY);
+
+        assertThat(service.execute(ValidatePINCommand.ofPinBlock(card.getId(), block, PIN_KEY_ID))).isFalse();
+        assertThat(card.getPinFailedAttempts()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldRejectAPinBlockOfAnotherCardWithoutCountingAnAttempt() {
+        String block = Iso9564Format4PinBlock.encrypt(CORRECT_PIN, "4111111111111111", PIN_KEY);
+
+        assertThatThrownBy(() -> service.execute(ValidatePINCommand.ofPinBlock(card.getId(), block, PIN_KEY_ID)))
+                .isInstanceOf(InvalidPinBlockException.class);
+        assertThat(card.getPinFailedAttempts()).isZero();
+        verify(encryptionPort, never()).verifyHash(anyString(), anyString());
+    }
+
+    @Test
+    void shouldRejectAnUnknownPinKey() {
+        String block = Iso9564Format4PinBlock.encrypt(CORRECT_PIN, card.getCardNumber().getValue(), PIN_KEY);
+
+        assertThatThrownBy(() -> service.execute(ValidatePINCommand.ofPinBlock(card.getId(), block, "pek-v9")))
+                .isInstanceOf(InvalidPinBlockException.class)
+                .hasMessageContaining("pek-v9");
+        assertThat(card.getPinFailedAttempts()).isZero();
     }
 
     @Test
@@ -157,6 +203,10 @@ class PINManagementServiceTest {
         Card card = Card.create(ClientId.of("12345678"), holder, CardType.VISA, CardCategory.CLASSIC);
         card.updateStatus(CardStatus.APPROVED);
         card.updateStatus(CardStatus.ISSUED);
+        card.updateCardData(com.unisono.card.shared.domain.valueobject.CardNumber.of("4532015112830366"),
+                com.unisono.card.shared.domain.valueobject.CVV.of("123"),
+                com.unisono.card.shared.domain.valueobject.PIN.of(CORRECT_PIN),
+                com.unisono.card.shared.domain.valueobject.ExpirationDate.of(12, LocalDate.now().getYear() + 3));
         card.updateStatus(CardStatus.ACTIVE);
         card.updatePIN(PIN_HASH);
         return card;

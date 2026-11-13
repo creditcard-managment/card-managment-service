@@ -1,5 +1,6 @@
 package com.unisono.card.payment.domain.service;
 
+import com.unisono.card.payment.domain.model.PinBlock;
 import com.unisono.card.payment.domain.event.PaymentDeclined;
 import com.unisono.card.payment.domain.event.PaymentProcessed;
 import com.unisono.card.payment.domain.event.RefundProcessed;
@@ -61,7 +62,7 @@ class PaymentDomainServiceTest {
     private static final CardId CARD_ID = CardId.of("550e8400-e29b-41d4-a716-446655440000");
     private static final String MERCHANT_ID = "6f1c2d3e-0000-4000-8000-000000000001";
     private static final Money AMOUNT = Money.ofARS(1500);
-    private static final String PIN = "1234";
+    private static final PinBlock PIN = new PinBlock("8E2C1F0A5B3D4E6F7A8B9C0D1E2F3A4B", "pek-v1");
     private static final String CVV = "123";
     private static final CardStatusSnapshot ACTIVE_CARD = new CardStatusSnapshot("ACTIVE", false, false);
 
@@ -281,6 +282,17 @@ class PaymentDomainServiceTest {
             Transaction transaction = pay(TransactionType.CASH_ADVANCE);
 
             assertDeclined(transaction, "55");
+            verifyNoInteractions(creditLimitPort, authorizationPort);
+        }
+
+        @Test
+        void shouldDeclineCashAdvanceWhenCardDataCannotDecryptThePinBlock() {
+            when(cardValidationPort.validatePin(CARD_ID, PIN)).thenThrow(CardValidationException.invalidPinBlock(CARD_ID));
+
+            Transaction transaction = pay(TransactionType.CASH_ADVANCE);
+
+            assertDeclined(transaction, "55");
+            assertThat(transaction.getDeclineReason()).contains("Invalid PIN block");
             verifyNoInteractions(creditLimitPort, authorizationPort);
         }
 

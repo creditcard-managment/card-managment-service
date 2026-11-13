@@ -56,6 +56,13 @@ encryption:
   # la clave activa al volver a guardarse
   legacy-secret-key: "${ENCRYPTION_KEY:MySecretKey32BytesForAES256!!123}"
 
+# Claves de cifrado de PIN (PEK) que comparte con los terminales: descifra los PIN blocks ISO 9564
+# formato 4 de validate-pin. El terminal envía el id de la clave (pinKeyId) con el bloque
+pin-encryption:
+  keys:
+    # Base64 de 16 bytes (AES-128): openssl rand -base64 16. ⚠️ Definirla en producción (idealmente en un HSM)
+    pek-v1: "${PIN_ENCRYPTION_KEY_V1:+ep2jpFqFwl6KCzkw+qerg==}"
+
 management:
   endpoints:
     web:

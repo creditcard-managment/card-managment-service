@@ -1,5 +1,6 @@
 package com.unisono.card.payment.domain.port.output;
 
+import com.unisono.card.payment.domain.model.PinBlock;
 import com.unisono.card.shared.domain.valueobject.CardId;
 
 import java.util.Optional;
@@ -20,7 +21,7 @@ public interface CardValidationPort {
      *
      * @return true if the PIN is correct, false if it is wrong or the card has no PIN set
      */
-    boolean validatePin(CardId cardId, String pin);
+    boolean validatePin(CardId cardId, PinBlock pin);
 
     /**
      * Verifies the CVV against card-data (card-not-present payments)

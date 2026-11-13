@@ -4,6 +4,7 @@ import com.unisono.card.payment.application.dto.request.ProcessCashAdvanceComman
 import com.unisono.card.payment.application.dto.request.ProcessPaymentCommand;
 import com.unisono.card.payment.application.mapper.PaymentMapper;
 import com.unisono.card.payment.domain.model.CardVerification;
+import com.unisono.card.payment.domain.model.PinBlock;
 import com.unisono.card.payment.domain.model.Transaction;
 import com.unisono.card.payment.domain.model.TransactionId;
 import com.unisono.card.payment.domain.model.TransactionStatus;
@@ -129,7 +130,7 @@ public class PaymentApplicationService implements ProcessPaymentUseCase {
                     .terminalId(command.getTerminalId())
                     .build();
 
-            Transaction transaction = process(paymentCommand, TransactionType.CASH_ADVANCE, CardVerification.ofPin(command.getPin()), true);
+            Transaction transaction = process(paymentCommand, TransactionType.CASH_ADVANCE, CardVerification.ofPin(new PinBlock(command.getPinBlock(), command.getPinKeyId())), true);
 
             return transaction;
 

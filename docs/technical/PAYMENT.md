@@ -158,6 +158,7 @@ stateDiagram-v2
 | `AuthorizationCode` | `approved(code)` → response `00`; `declined(rc)` → `DECLINED-xxxxxx`. |
 | `PaymentMethod` | `CHIP`, `CONTACTLESS`, `MOBILE_WALLET` (seguros); `SWIPE`, `ONLINE`, `MANUAL`. `ONLINE` y `MANUAL` requieren CVV; `ONLINE` es tarjeta no presente. |
 | `CardVerification` | PIN y CVV que ingresa el titular. Se verifican contra card-data y nunca se guardan. |
+| `PinBlock` | PIN cifrado por el terminal: bloque ISO 9564 formato 4 (32 hex) + id de la clave. payment-processing no lo puede descifrar: lo reenvía a card-data. `toString()` no muestra el bloque. |
 | `TransactionType` | `PURCHASE` (P), `REFUND` (R), `REVERSAL` (V), `CASH_ADVANCE` (A), `PRE_AUTHORIZATION` (PA), `CAPTURE` (C). |
 
 ### 3.4 Reglas de validación (`TransactionValidationService`)
@@ -238,6 +239,7 @@ Después sigue el mismo flujo que la compra, con `merchantName = "ATM Cash Advan
 
 - La transacción es **`CASH_ADVANCE`**, se valida con `POST /validate/cash-advance` y consume con `consume-cash-advance`, es decir, contra el tope de adelantos.
 - **Se verifica el PIN** contra card-data (`POST /cards/{id}/validate-pin`), después del estado de la tarjeta y antes de validar el crédito. Un PIN incorrecto declina la transacción con `55`. card-data cuenta el intento fallido: al tercero consecutivo bloquea la tarjeta, y los adelantos siguientes se declinan con `62`.
+- **El PIN nunca viaja en claro.** El terminal lo cifra en un **PIN block ISO 9564 formato 4** (AES) con una clave de cifrado de PIN (PEK) que comparte con card-data, y manda el bloque (`pinBlock`) con el id de la clave (`pinKeyId`). payment-processing reenvía el bloque tal cual: no tiene la clave. card-data lo descifra en memoria con la clave y el PAN de la tarjeta (el bloque está atado al PAN, así que no sirve para otra tarjeta) y lo compara con el hash. Si card-data no lo puede descifrar (clave desconocida, formato o tarjeta equivocados), responde 400 sin contar un intento, y el adelanto se declina con `55` (`Invalid PIN block`). Detalle en [DATA.md §4.3](DATA.md).
 
 ### 4.3 Reverso
 
@@ -372,7 +374,7 @@ Respuesta **402** `PaymentResponse` cuando se rechaza (la transacción queda gua
 
 ### 5.2 `POST /api/v1/payments/cash-advance`
 
-Campos: `cardId`, `cardNumberToken`, `lastFourDigits`, `expirationDate`, `amount` (0,01 – **5.000,00**), `currency`, `terminalId` (obligatorio), `atmLocation`, `country`, `pin` (4 dígitos, obligatorio; se verifica contra card-data, ver §4.2). Respuesta **201** `PaymentResponse`, o **402** si se rechaza.
+Campos: `cardId`, `cardNumberToken`, `lastFourDigits`, `expirationDate`, `amount` (0,01 – **5.000,00**), `currency`, `terminalId` (obligatorio), `atmLocation`, `country`, `pinBlock` (PIN block ISO 9564 formato 4, 32 caracteres hex, obligatorio) y `pinKeyId` (id de la clave con que lo cifró el terminal, obligatorio). El PIN se verifica contra card-data (§4.2). Ya no se acepta el PIN en claro (`pin`). Respuesta **201** `PaymentResponse`, o **402** si se rechaza.
 
 ### 5.3 Otros endpoints
 
@@ -463,7 +465,7 @@ En compras y adelantos, `InsufficientFundsException`, `FraudDetectedException`, 
 
 | Puerto | Destino | Llamadas | URL por defecto (`services.*`) |
 |---|---|---|---|
-| `CardValidationPort` | card-data | `GET /api/v1/cards/{cardId}` → `status`, `isBlocked`, `isExpired`; `POST /api/v1/cards/{cardId}/validate-pin` → `valid` (adelantos); `POST …/validate-cvv` → `valid` (`ONLINE`/`MANUAL`) | `CARD_DATA_SERVICE_URL` = `http://localhost:8081` |
+| `CardValidationPort` | card-data | `GET /api/v1/cards/{cardId}` → `status`, `isBlocked`, `isExpired`; `POST /api/v1/cards/{cardId}/validate-pin` con `{ pinBlock, pinKeyId }` → `valid` (adelantos); `POST …/validate-cvv` → `valid` (`ONLINE`/`MANUAL`) | `CARD_DATA_SERVICE_URL` = `http://localhost:8081` |
 | `CreditLimitPort` (`SagaCreditLimitPort` → `CreditLimitAdapter`) | card-limits | `POST /api/v1/credit-limits/validate/purchase` · `…/validate/cash-advance`; `GET …/card/{cardId}` (resuelve el `creditLimitId`); `POST …/{creditLimitId}/consume-purchase` · `…/consume-cash-advance` · `…/restore-credit` (reversos y devoluciones), con `operationId`; `POST …/{creditLimitId}/operations/{operationId}/cancel` (compensación, §4.7) | `CARD_LIMITS_SERVICE_URL` = `http://localhost:8082` |
 | `MerchantValidationPort` | Base compartida | `merchants` (existe y `status = 'ACTIVE'`) y `payment_terminals` (terminal `ACTIVE` → `merchant_id`), por JPA de solo lectura | — |
 | `FraudCheckPort` | Servicio antifraude | `/api/v1/fraud/*` | `FRAUD_DETECTION_SERVICE_URL` = `http://localhost:8086` (no existe en el repo; si no responde se usa el cálculo local) |
@@ -481,6 +483,7 @@ No hay un servicio de comercios: `merchants` y `payment_terminals` (V4) se carga
 | Tarjeta | Error de red o 5xx | 503 `SERVICE_UNAVAILABLE` |
 | PIN | `valid=false` | `DECLINED` `55` (402) |
 | PIN | 422 (tarjeta bloqueada) | `DECLINED` `62` (402) |
+| PIN | 400 (PIN block indescifrable o clave desconocida) | `DECLINED` `55` (402), `Invalid PIN block`; no suma un intento |
 | PIN | Error de red o 5xx | 503 `SERVICE_UNAVAILABLE` |
 | CVV | `valid=false` | `DECLINED` `N7` (402) |
 | CVV | 422 (tarjeta bloqueada) | `DECLINED` `62` (402) |
@@ -595,5 +598,5 @@ El esquema se crea con Flyway en el repo `card-management-database` (`migrations
 
 4. **Compensación sin revisión de fondos:** deshacer una restauración vuelve a consumir lo restaurado sin validar límites, así que el disponible puede quedar por debajo de lo que permitiría una compra nueva. Si la compensación ocurre otro día (u otro mes), el cupo diario (o mensual) ya se reseteó y no se vuelve a tocar.
 5. **Compensación sin alertas:** una operación que no se puede cancelar (card-limits caído) queda `PENDING` y se reintenta sin límite. Solo se ve en el log y en `payment_credit_operations.attempts`; no hay métrica ni alerta. Lo mismo pasa con los eventos fallidos del outbox.
-6. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización) y el PIN viaja en claro en el request.
+6. **Seguridad:** el token del PAN lo provee el cliente (no hay servicio de tokenización). El PIN de los adelantos ya viaja cifrado (PIN block), pero la clave de cifrado de PIN es una sola por configuración, sin HSM ni DUKPT (una clave por transacción). Entre servicios no hay TLS ni autenticación.
 7. **Tests incompletos:** hay tests unitarios de `PaymentDomainService`, `Transaction` (devoluciones), `SettlementService`, de los adapters de card-data, card-limits y comercios, y del `GlobalExceptionHandler`. También de `TransactionReversalService`, `PreAuthorizationExpiryService`, la saga (`SagaCreditLimitPort`, compensador y reconciliador), el outbox (publisher, relay y limpieza) y `TransactionEntityMapper` (ida y vuelta dominio → entidad → dominio). Faltan los de controllers, persistencia contra una base real (el lock y las consultas) y `RefundApplicationService`.

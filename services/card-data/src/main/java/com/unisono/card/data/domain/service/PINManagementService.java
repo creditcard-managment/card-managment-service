@@ -6,6 +6,8 @@ import com.unisono.card.data.domain.port.input.ResetPINUseCase;
 import com.unisono.card.data.domain.port.input.ValidatePINUseCase;
 import com.unisono.card.data.domain.port.output.CardRepository;
 import com.unisono.card.data.domain.port.output.EncryptionPort;
+import com.unisono.card.data.domain.port.output.PinBlockPort;
+import com.unisono.card.shared.infrastructure.security.InvalidPinBlockException;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
@@ -31,6 +33,7 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
     private final CardRepository cardRepository;
     private final EncryptionPort encryptionPort;
     private final CardEventEmitter eventEmitter;
+    private final PinBlockPort pinBlockPort;
 
     // ========================================
     // ValidatePINUseCase
@@ -48,8 +51,12 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
             return false;
         }
 
+        // Un PIN block se descifra solo en memoria. Si no se puede descifrar (clave, formato o tarjeta
+        // equivocados) se rechaza con 400 sin contar un intento: no se llegó a comparar ningún PIN
+        String pin = command.hasPinBlock() ? decryptPinBlock(command, card) : command.plainPin();
+
         // Validar PIN usando BCrypt
-        boolean isValid = encryptionPort.verifyHash(command.plainPin(), card.getPinHash());
+        boolean isValid = encryptionPort.verifyHash(pin, card.getPinHash());
 
         if (isValid) {
             card.resetPinFailedAttempts();
@@ -61,6 +68,14 @@ public class PINManagementService implements ValidatePINUseCase, ResetPINUseCase
         cardRepository.save(card);
 
         return isValid;
+    }
+
+    private String decryptPinBlock(ValidatePINCommand command, Card card) {
+        if (card.getCardNumber() == null) {
+            // Sin PAN no se puede descifrar: el bloque está atado a él
+            throw new InvalidPinBlockException("La tarjeta no tiene PAN para descifrar el PIN block");
+        }
+        return pinBlockPort.decryptPin(command.pinKeyId(), command.pinBlock(), card.getCardNumber());
     }
 
     // ========================================
