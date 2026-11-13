@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.adapter.output.creditlimit;
 
+import com.unisono.card.payment.infrastructure.observability.ConsistencyMonitor;
 import com.unisono.card.payment.domain.exception.ExternalServiceException;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.PaymentCreditOperationEntity;
 import com.unisono.card.payment.infrastructure.adapter.output.persistence.entity.PaymentCreditOperationEntity.Status;
@@ -34,12 +35,14 @@ class CreditOperationReconcilerTest {
     private CreditLimitAdapter adapter;
     @Mock
     private PlatformTransactionManager transactionManager;
+    @Mock
+    private ConsistencyMonitor monitor;
 
     private CreditOperationReconciler reconciler;
 
     @BeforeEach
     void setUp() {
-        reconciler = new CreditOperationReconciler(repository, adapter, transactionManager);
+        reconciler = new CreditOperationReconciler(repository, adapter, monitor, transactionManager);
     }
 
     @Test
@@ -56,6 +59,7 @@ class CreditOperationReconcilerTest {
         assertThat(second.getStatus()).isEqualTo(Status.COMPENSATED);
         assertThat(first.getAttempts()).isEqualTo(1);
         verify(repository).saveAll(List.of(first, second));
+        verify(monitor, org.mockito.Mockito.times(2)).compensationSucceeded(ConsistencyMonitor.SOURCE_RECONCILER);
     }
 
     @Test
@@ -74,6 +78,7 @@ class CreditOperationReconcilerTest {
         assertThat(failing.getAttempts()).isEqualTo(1);
         assertThat(failing.getLastError()).contains("Connection refused");
         assertThat(next.getStatus()).isEqualTo(Status.COMPENSATED);
+        verify(monitor).compensationFailed(ConsistencyMonitor.SOURCE_RECONCILER, "op-1", 1);
     }
 
     @Test
