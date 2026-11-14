@@ -49,6 +49,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 /**
  * Outbox de card-limits contra un PostgreSQL real (Testcontainers): el evento se guarda en la misma transacción
@@ -108,6 +110,7 @@ class CreditLimitOutboxPersistenceTest {
     @BeforeEach
     void setUp() {
         outbox.deleteAll();
+        when(cardValidationPort.isCardActive(any())).thenReturn(true);
         cardId = CardId.of(UUID.randomUUID().toString());
         creditLimitId = new TransactionTemplate(transactionManager).execute(s ->
                 creditLimits.save(CreditLimit.assign(cardId, Money.ofARS(500_000), 0.3, "test")).getId());

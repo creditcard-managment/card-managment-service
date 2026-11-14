@@ -2,6 +2,7 @@ package com.unisono.card.limits.domain.service;
 
 import com.unisono.card.limits.domain.model.CreditLimit;
 import com.unisono.card.limits.domain.port.input.ValidatePurchaseUseCase;
+import com.unisono.card.limits.domain.port.output.CardValidationPort;
 import com.unisono.card.limits.domain.port.output.CreditLimitRepository;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.Money;
@@ -20,7 +21,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class CreditValidationService implements ValidatePurchaseUseCase {
 
+    static final String CARD_NOT_ACTIVE = "La tarjeta no está activa";
+
     private final CreditLimitRepository creditLimitRepository;
+    private final CardValidationPort cardValidationPort;
 
     @Override
     public ValidationResult validatePurchase(ValidatePurchaseCommand command) {
@@ -34,6 +38,10 @@ public class CreditValidationService implements ValidatePurchaseUseCase {
                 ));
 
         Money availableCredit = creditLimit.getAvailableCredit().getAmount();
+
+        if (!cardValidationPort.isCardActive(command.cardId())) {
+            return ValidationResult.rejected(CARD_NOT_ACTIVE, availableCredit, command.purchaseAmount());
+        }
 
         // Validar si la compra puede realizarse
         if (!creditLimit.canPurchase(command.purchaseAmount())) {
@@ -56,6 +64,10 @@ public class CreditValidationService implements ValidatePurchaseUseCase {
                 ));
 
         Money availableCredit = creditLimit.getAvailableCredit().getAmount();
+
+        if (!cardValidationPort.isCardActive(command.cardId())) {
+            return ValidationResult.rejected(CARD_NOT_ACTIVE, availableCredit, command.advanceAmount());
+        }
 
         // Validar si el adelanto puede realizarse
         if (!creditLimit.canCashAdvance(command.advanceAmount())) {
