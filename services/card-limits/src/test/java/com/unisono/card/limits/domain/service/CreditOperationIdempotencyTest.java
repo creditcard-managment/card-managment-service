@@ -32,6 +32,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Operaciones de crédito con operationId: idempotencia, cancelación exacta y anulación antes de llegar,
@@ -45,12 +46,14 @@ class CreditOperationIdempotencyTest {
     private final InMemoryOperations operations = new InMemoryOperations();
     /** Eventos encolados en el outbox (topic → evento) */
     private final List<Map.Entry<String, DomainEvent>> outbox = new java.util.ArrayList<>();
+    private final CardValidationPort cardValidationPort = mock(CardValidationPort.class);
     private CreditLimitManagementService service;
     private CreditLimit creditLimit;
 
     @BeforeEach
     void setUp() {
-        service = new CreditLimitManagementService(creditLimits, mock(CardValidationPort.class), operations,
+        when(cardValidationPort.isCardActive(CARD_ID)).thenReturn(true);
+        service = new CreditLimitManagementService(creditLimits, cardValidationPort, operations,
                 new CreditLimitEventEmitter((topic, key, event) -> outbox.add(Map.entry(topic, event))));
         creditLimit = creditLimits.save(CreditLimit.assign(CARD_ID, Money.ofARS(500_000), 0.3, "test"));
     }
@@ -171,6 +174,49 @@ class CreditOperationIdempotencyTest {
         assertThatThrownBy(() -> service.cancelOperation(new CancelOperationCommand(other.getId(), "op-1")))
                 .isInstanceOf(BusinessRuleException.class);
         assertThat(creditLimit.getConsumedCredit().getAmount()).isEqualTo(Money.ofARS(20_000));
+    }
+
+    // ========================================
+    // Estado de la tarjeta
+    // ========================================
+
+    @Test
+    void consumptionOnAnInactiveCardIsRejectedAndLeavesNoTrace() {
+        when(cardValidationPort.isCardActive(CARD_ID)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.consumeForPurchase(consume("op-1", 20_000)))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessageContaining("no está activa");
+        assertThatThrownBy(() -> service.consumeForCashAdvance(consume("op-2", 1_000)))
+                .isInstanceOf(BusinessRuleException.class);
+
+        assertThat(creditLimit.getConsumedCredit().getAmount().isZero()).isTrue();
+        assertThat(operations.findById("op-1")).isEmpty();
+        assertThat(outbox).isEmpty();
+    }
+
+    @Test
+    void repeatingAnAppliedConsumptionAfterTheCardIsBlockedIsStillIdempotent() {
+        service.consumeForPurchase(consume("op-1", 20_000));
+        when(cardValidationPort.isCardActive(CARD_ID)).thenReturn(false);
+
+        CreditLimit result = service.consumeForPurchase(consume("op-1", 20_000));
+
+        assertThat(result.getConsumedCredit().getAmount()).isEqualTo(Money.ofARS(20_000));
+    }
+
+    @Test
+    void restoreReleaseAndCancelStillWorkOnAnInactiveCard() {
+        service.consumeForPurchase(consume("op-1", 20_000));
+        service.consumeForPurchase(consume("op-2", 10_000));
+        when(cardValidationPort.isCardActive(CARD_ID)).thenReturn(false);
+
+        service.restoreCredit(new RestoreCreditCommand(creditLimit.getId(), Money.ofARS(5_000), LocalDate.now(),
+                "devolución", "op-3"));
+        service.cancelOperation(new CancelOperationCommand(creditLimit.getId(), "op-2"));
+        service.releaseCredit(new ReleaseCreditCommand(creditLimit.getId(), Money.ofARS(5_000), "pago del resumen"));
+
+        assertThat(creditLimit.getConsumedCredit().getAmount()).isEqualTo(Money.ofARS(10_000));
     }
 
     private ConsumeCreditCommand consume(String operationId, long amount) {

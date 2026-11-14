@@ -334,6 +334,13 @@ public class CreditLimitManagementService implements
             }
         }
 
+        // Solo los consumos exigen tarjeta activa: restaurar (reversos y devoluciones) debe seguir funcionando
+        // sobre una tarjeta ya bloqueada, cancelada o vencida. Va después de la idempotencia: repetir una
+        // operación ya aplicada responde 200 aunque la tarjeta se haya bloqueado mientras tanto
+        if (type != CreditOperation.Type.RESTORE) {
+            ensureCardActive(creditLimit);
+        }
+
         CreditLimit.ConsumptionSnapshot before = creditLimit.consumptionSnapshot();
         action.accept(creditLimit);
         CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
@@ -347,6 +354,13 @@ public class CreditLimitManagementService implements
 
         log.info("Credit operation {} applied. Available: {}", type, savedLimit.getAvailableCredit().getAmount());
         return savedLimit;
+    }
+
+    private void ensureCardActive(CreditLimit creditLimit) {
+        if (!cardValidationPort.isCardActive(creditLimit.getCardId())) {
+            throw new BusinessRuleException(String.format(
+                    "La tarjeta %s no está activa: no puede consumir crédito", creditLimit.getCardId().getValue()));
+        }
     }
 
     private static void validateOwnership(CreditOperation operation, String creditLimitId) {
