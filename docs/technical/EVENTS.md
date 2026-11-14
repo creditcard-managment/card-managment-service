@@ -70,10 +70,10 @@ Estado según el código actual de los servicios:
 | `CARD_UNBLOCKED` | `card.unblocked` | `CardUnblockedEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
 | `CARD_CANCELLED` | `card.cancelled` | `CardCancelledEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
 | `CARD_EXPIRED` | `card.expired` | `CardExpiredEvent` | card-data | card-lifecycle (historial) | ✅ En uso (job diario de vencimiento o `PUT /status`) |
-| `CREDIT_LIMIT_ASSIGNED` | `credit-limit.assigned` | `CreditLimitAssignedEvent` | — | — | Contrato definido, sin uso |
-| `CREDIT_LIMIT_UPDATED` | `credit-limit.updated` | `CreditLimitUpdatedEvent` | — | — | Contrato definido, sin uso |
-| `CREDIT_LIMIT_CONSUMED` | `credit-limit.consumed` | `CreditLimitConsumedEvent` | — | — | Contrato definido, sin uso |
-| `CREDIT_LIMIT_RELEASED` | `credit-limit.released` | — | — | — | Solo topic |
+| `CREDIT_LIMIT_ASSIGNED` | `credit-limit.assigned` | `CreditLimitAssignedEvent` | card-limits | — | ✅ Se publica, ver §4.10 |
+| `CREDIT_LIMIT_UPDATED` | `credit-limit.updated` | `CreditLimitUpdatedEvent` | card-limits | — | ✅ Se publica |
+| `CREDIT_LIMIT_CONSUMED` | `credit-limit.consumed` | `CreditLimitConsumedEvent` | card-limits | — | ✅ Se publica |
+| `CREDIT_LIMIT_RELEASED` | `credit-limit.released` | `CreditLimitReleasedEvent` | card-limits | — | ✅ Se publica |
 | `PAYMENT_INITIATED` | `payment.processing.initiated` | `PaymentInitiatedEvent` | payment-processing | — | ✅ Se publica, ver §6 |
 | `PAYMENT_AUTHORIZED` | `payment.processing.authorized` | `PaymentAuthorizedEvent` | payment-processing | — | ✅ Se publica |
 | `PAYMENT_PROCESSED` | `payment.processing.completed` | `PaymentProcessedEvent` | payment-processing | — | ✅ Se publica |
@@ -210,15 +210,31 @@ Los ocho eventos de cambio de estado implementan `CardStatusChange`, que los exp
 
 `EXPIRED` es un estado final. Se llega desde `ISSUED`, `ACTIVE`, `BLOCKED` o `BLOCKED_FRAUD`: con el job diario de vencimiento de card-data (`reason` = `Vencimiento por fecha (MM/YY)`, `expiredBy` = `system`) o con `PUT /status`. Ver [DATA.md §5.5](DATA.md).
 
-### 4.10 Eventos de límite de crédito (sin uso)
+### 4.10 Eventos de límite de crédito (`credit-limit.*`)
 
-Contratos definidos; `card-limits` todavía no los publica ni depende de esta librería ([LIMITS.md §9](LIMITS.md)). Los montos son `BigDecimal`.
+Los publica `card-limits` con su propio transactional outbox (`credit_limit_outbox_events`, V15): el evento se guarda en la misma transacción que el cambio del límite y `CreditLimitOutboxRelay` lo publica después del commit, con el mismo esquema que el outbox de card-data (§5.2). La key es el `cardId`. Los montos son `BigDecimal` en `currency` (hoy siempre `ARS`).
 
-| Evento | Topic | Campos |
-|---|---|---|
-| `CreditLimitAssignedEvent` | `credit-limit.assigned` | `cardId`, `purchaseLimitAmount`, `cashAdvanceLimitAmount`, `currency`, `assignedBy` |
-| `CreditLimitUpdatedEvent` | `credit-limit.updated` | `cardId`, `previousPurchaseLimitAmount`, `newPurchaseLimitAmount`, `currency`, `reason`, `updatedBy` |
-| `CreditLimitConsumedEvent` | `credit-limit.consumed` | `cardId`, `transactionId`, `amount`, `availableAmount`, `currency` |
+| Evento | Topic | Cuándo | Campos |
+|---|---|---|---|
+| `CreditLimitAssignedEvent` | `credit-limit.assigned` | Asignación del límite (incluye los límites diario y mensual iniciales: no publican `updated`) | `cardId`, `creditLimitId`, `purchaseLimitAmount`, `cashAdvanceLimitAmount`, `dailyLimitAmount`, `monthlyLimitAmount`, `currency`, `assignedBy` |
+| `CreditLimitUpdatedEvent` | `credit-limit.updated` | Cada cambio de un límite: aumento o reducción del de compras, el de adelantos, el diario o el mensual (uno por límite) | `cardId`, `creditLimitId`, `limitType` (`PURCHASE`, `CASH_ADVANCE`, `DAILY`, `MONTHLY`), `previousAmount`, `newAmount`, `currency`, `reason`, `updatedBy` |
+| `CreditLimitConsumedEvent` | `credit-limit.consumed` | Sube lo consumido | `cardId`, `creditLimitId`, `operationId`, `operationType`, `amount`, `consumedAmount`, `availableAmount`, `currency` |
+| `CreditLimitReleasedEvent` | `credit-limit.released` | Baja lo consumido | Los mismos que `consumed` |
+
+**`operationType`** (de `consumed` / `released`):
+
+| Operación en card-limits | Evento | `operationType` | `operationId` |
+|---|---|---|---|
+| `consume-purchase` | `consumed` | `PURCHASE` | El del request (payment-processing siempre lo envía) |
+| `consume-cash-advance` | `consumed` | `CASH_ADVANCE` | Ídem |
+| `restore-credit` (reverso, devolución) | `released` | `REFUND` | Ídem |
+| `release-credit` (pago del resumen) | `released` | `PAYMENT` | Nulo |
+| `operations/{id}/cancel` de un consumo | `released` | `CONSUMPTION_CANCELLED` | El de la operación cancelada |
+| `operations/{id}/cancel` de una restauración | `consumed` | `REFUND_CANCELLED` | Ídem |
+
+- `amount` es lo que movió la operación. `consumedAmount` y `availableAmount` son los saldos después del cambio.
+- **No publican:** una operación repetida con el mismo `operationId` (ya publicó la primera vez), la cancelación de algo ya cancelado o que nunca llegó (`VOIDED`), y una restauración que no bajó nada (lo consumido ya estaba en cero; no hay saldo a favor). Tampoco las operaciones rechazadas: la transacción se revierte con su evento.
+- Hoy no tienen consumidores.
 
 ---
 
@@ -434,9 +450,9 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 | Aspecto | Comportamiento actual |
 |---|---|
-| Atomicidad DB ↔ Kafka | Garantizada con transactional outbox en card-data (`outbox_events`) y en payment-processing (`payment_outbox_events`): el evento se confirma junto con el cambio y el relay lo publica hasta lograrlo. |
+| Atomicidad DB ↔ Kafka | Garantizada con transactional outbox en card-data (`outbox_events`), payment-processing (`payment_outbox_events`) y card-limits (`credit_limit_outbox_events`): el evento se confirma junto con el cambio y el relay lo publica hasta lograrlo. |
 | Entrega al broker | *At-least-once*: `acks=all` + idempotencia del productor + reintentos del relay. Un evento puede llegar dos veces con el mismo `eventId`: si la instancia cae entre el envío y el commit, o si un envío ya estaba en vuelo cuando el productor lo dio por vencido y el broker lo escribe igual (ocurre con cortes del broker). |
-| Orden | Por tarjeta dentro de cada topic `card.*` y `payment.*` (key `cardId`). No hay orden entre topics distintos. |
+| Orden | Por tarjeta dentro de cada topic `card.*`, `payment.*` y `credit-limit.*` (key `cardId`). No hay orden entre topics distintos. |
 | Procesamiento en el consumidor | *At-least-once*: ack manual después de procesar. |
 | Idempotencia del consumidor | card-lifecycle descarta duplicados de `card.created`: cada tarjeta tiene una sola transición `CREATE` (verificación previa + índice único `uq_state_transitions_create`). |
 | Errores en el consumidor | Reintentos con espera exponencial y, si no alcanza, DLQ (§5.3). Un JSON ilegible va a la DLQ sin reintentos. |
@@ -450,7 +466,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 1. Crear la clase en `com.unisono.card.events.domain`, extendiendo `DomainEvent`, con campos `final` de tipos simples (`String`, números, `LocalDateTime`). No incluir datos sensibles (PAN, CVV, PIN).
 2. Agregar dos constructores: uno `@JsonCreator` con `@JsonProperty` para todos los campos, incluidos `eventId` y `occurredOn` (llama a `super(eventId, occurredOn)`), y otro de negocio que llame a `super()`.
 3. Agregar el nombre del topic a `KafkaTopics` siguiendo la convención `<dominio>.<hecho>`.
-4. En el productor, encolarlo con `EventOutboxPort.enqueue(topic, aggregateId, event)` dentro de la transacción del caso de uso (card-data). En payment-processing, el contrato va en `com.unisono.card.events.domain.payment`: se agrega el evento de dominio al aggregate, su traducción a `PaymentIntegrationEventMapper` y su topic a `PaymentEventTopicResolver`. El id del aggregate (o el `cardId`) es la key del mensaje y preserva el orden.
+4. En el productor, encolarlo con `EventOutboxPort.enqueue(topic, aggregateId, event)` dentro de la transacción del caso de uso (card-data y card-limits, cada uno con su `EventOutboxPort`). En payment-processing, el contrato va en `com.unisono.card.events.domain.payment`: se agrega el evento de dominio al aggregate, su traducción a `PaymentIntegrationEventMapper` y su topic a `PaymentEventTopicResolver`. El id del aggregate (o el `cardId`) es la key del mensaje y preserva el orden.
 5. En el consumidor, hacer el ack solo tras procesar con éxito, propagar las excepciones para que actúe el error handler y manejar duplicados con `eventId`.
 6. Agregar el evento a `EventContractTest` y documentarlo en este archivo (§3 y §4).
 
@@ -459,5 +475,4 @@ docker exec -it card-management-kafka kafka-console-consumer \
 ## 10. Limitaciones conocidas y deuda técnica
 
 1. **Reproceso de la DLQ acotado** (ver §5.3): `DeadLetterRedriver` reinyecta los mensajes durante unos 31 min; si la causa dura más (o el mensaje es ilegible), quedan en la DLQ y hay que reinyectarlos a mano. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
-2. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
-3. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.
+2. **Eventos de pago y de límite sin consumidores.** Los `payment.*` y `credit-limit.*` se publican, pero nadie los lee. Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.

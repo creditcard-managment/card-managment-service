@@ -8,6 +8,7 @@ import com.unisono.card.limits.domain.port.input.*;
 import com.unisono.card.limits.domain.port.output.CardValidationPort;
 import com.unisono.card.limits.domain.port.output.CreditLimitRepository;
 import com.unisono.card.limits.domain.port.output.CreditOperationRepository;
+import com.unisono.card.limits.domain.service.CreditLimitEventEmitter.Movement;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.valueobject.CardId;
@@ -43,6 +44,7 @@ public class CreditLimitManagementService implements
     private final CreditLimitRepository creditLimitRepository;
     private final CardValidationPort cardValidationPort;
     private final CreditOperationRepository creditOperationRepository;
+    private final CreditLimitEventEmitter eventEmitter;
 
     // ========================================
     // AssignCreditLimitUseCase
@@ -93,6 +95,9 @@ public class CreditLimitManagementService implements
         // Guardar historial
         creditLimit.getHistory().forEach(creditLimitRepository::saveHistory);
 
+        // Los límites diario y mensual iniciales son parte de la asignación: un solo evento
+        eventEmitter.assigned(savedLimit, command.assignedBy());
+
         log.info("Credit limit assigned successfully: {}", savedLimit.getId());
 
         return savedLimit;
@@ -116,10 +121,11 @@ public class CreditLimitManagementService implements
 
         CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
 
-        // Guardar nuevo registro de historial
+        // Guardar nuevo registro de historial y publicar el cambio
         CreditLimitHistory lastChange = creditLimit.getLastChange();
         if (lastChange != null && lastChange.getId() == null) {
             creditLimitRepository.saveHistory(lastChange);
+            eventEmitter.limitChanged(savedLimit, lastChange);
         }
 
         log.info("Purchase limit increased successfully");
@@ -141,10 +147,11 @@ public class CreditLimitManagementService implements
 
         CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
 
-        // Guardar nuevo registro de historial
+        // Guardar nuevo registro de historial y publicar el cambio
         CreditLimitHistory lastChange = creditLimit.getLastChange();
         if (lastChange != null && lastChange.getId() == null) {
             creditLimitRepository.saveHistory(lastChange);
+            eventEmitter.limitChanged(savedLimit, lastChange);
         }
 
         log.info("Purchase limit decreased successfully");
@@ -166,10 +173,11 @@ public class CreditLimitManagementService implements
 
         CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
 
-        // Guardar nuevo registro de historial
+        // Guardar nuevo registro de historial y publicar el cambio
         CreditLimitHistory lastChange = creditLimit.getLastChange();
         if (lastChange != null && lastChange.getId() == null) {
             creditLimitRepository.saveHistory(lastChange);
+            eventEmitter.limitChanged(savedLimit, lastChange);
         }
 
         log.info("Cash advance limit updated successfully");
@@ -205,7 +213,10 @@ public class CreditLimitManagementService implements
         List<CreditLimitHistory> newHistory = creditLimit.getHistory().stream()
                 .filter(h -> h.getId() == null)
                 .toList();
-        newHistory.forEach(creditLimitRepository::saveHistory);
+        newHistory.forEach(change -> {
+            creditLimitRepository.saveHistory(change);
+            eventEmitter.limitChanged(savedLimit, change);
+        });
 
         log.info("Temporal limits updated successfully");
 
@@ -222,7 +233,7 @@ public class CreditLimitManagementService implements
                 command.creditLimitId(), command.amount(), operationLog(command.operationId()));
 
         return applyOperation(command.creditLimitId(), command.operationId(), CreditOperation.Type.CONSUME_PURCHASE,
-                command.description(), creditLimit -> creditLimit.consumeForPurchase(command.amount()));
+                command.description(), Movement.PURCHASE, creditLimit -> creditLimit.consumeForPurchase(command.amount()));
     }
 
     @Override
@@ -231,7 +242,8 @@ public class CreditLimitManagementService implements
                 command.creditLimitId(), command.amount(), operationLog(command.operationId()));
 
         return applyOperation(command.creditLimitId(), command.operationId(), CreditOperation.Type.CONSUME_CASH_ADVANCE,
-                command.description(), creditLimit -> creditLimit.consumeForCashAdvance(command.amount()));
+                command.description(), Movement.CASH_ADVANCE,
+                creditLimit -> creditLimit.consumeForCashAdvance(command.amount()));
     }
 
     @Override
@@ -240,10 +252,12 @@ public class CreditLimitManagementService implements
                 command.creditLimitId(), command.paymentAmount());
 
         CreditLimit creditLimit = lockCreditLimitOrThrow(command.creditLimitId());
+        Money consumedBefore = creditLimit.getConsumedCredit().getAmount();
 
         creditLimit.releaseCredit(command.paymentAmount());
 
         CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
+        eventEmitter.creditMoved(savedLimit, consumedBefore, Movement.PAYMENT, null);
 
         log.info("Credit released successfully. Available: {}",
                 savedLimit.getAvailableCredit().getAmount());
@@ -258,7 +272,7 @@ public class CreditLimitManagementService implements
                 operationLog(command.operationId()));
 
         return applyOperation(command.creditLimitId(), command.operationId(), CreditOperation.Type.RESTORE,
-                command.description(), creditLimit -> {
+                command.description(), Movement.REFUND, creditLimit -> {
                     Money notRestored = creditLimit.restoreConsumption(command.amount(), command.originalTransactionDate());
                     if (!notRestored.isZero()) {
                         log.warn("Credit limit {}: {} not restored because it exceeds the consumed credit (already paid)",
@@ -289,10 +303,13 @@ public class CreditLimitManagementService implements
             return new CancelOperationResult(CancelOutcome.ALREADY_CANCELLED, creditLimit);
         }
 
+        Money consumedBefore = creditLimit.getConsumedCredit().getAmount();
         creditLimit.revertOperation(operation);
         CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
         operation.cancel();
         creditOperationRepository.save(operation);
+        eventEmitter.creditMoved(savedLimit, consumedBefore, operation.getType() == CreditOperation.Type.RESTORE
+                ? Movement.REFUND_CANCELLED : Movement.CONSUMPTION_CANCELLED, command.operationId());
 
         log.info("Credit operation {} ({}) cancelled. Available: {}",
                 command.operationId(), operation.getType(), savedLimit.getAvailableCredit().getAmount());
@@ -309,7 +326,7 @@ public class CreditLimitManagementService implements
      * una operación ya aplicada no se repite y una cancelada se rechaza.
      */
     private CreditLimit applyOperation(String creditLimitId, String operationId, CreditOperation.Type type,
-                                       String description, Consumer<CreditLimit> action) {
+                                       String description, Movement movement, Consumer<CreditLimit> action) {
         CreditLimit creditLimit = lockCreditLimitOrThrow(creditLimitId);
 
         if (operationId != null) {
@@ -337,6 +354,8 @@ public class CreditLimitManagementService implements
             creditOperationRepository.save(CreditOperation.applied(
                     operationId, creditLimitId, type, before, creditLimit.consumptionSnapshot(), description));
         }
+        // Solo cuando se aplicó: una operación repetida (idempotente) ya publicó su evento
+        eventEmitter.creditMoved(savedLimit, before.credit(), movement, operationId);
 
         log.info("Credit operation {} applied. Available: {}", type, savedLimit.getAvailableCredit().getAmount());
         return savedLimit;
