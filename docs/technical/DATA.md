@@ -32,6 +32,7 @@ flowchart LR
 - **Crea** la tarjeta en estado `REQUESTED` y **notifica cada cambio de estado** al ecosistema vía Kafka (§8).
 - **card-lifecycle** consume `card.created`, gestiona aprobación, rechazo, emisión, activación, bloqueo y cancelación, y escribe de vuelta en `card-data` el nuevo estado, la fecha de activación, los datos generados en la emisión (PAN, CVV, PIN, vencimiento) y los motivos de bloqueo y cancelación. No escribe la tabla `cards` directamente.
 - **Expone** operaciones de seguridad (bloqueo, bloqueo por fraude, desbloqueo) y de PIN (validación y cambio).
+- **Bloquea por fraude** la tarjeta cuando payment-processing rechaza un pago con `responseCode` `59`: consume `payment.processing.declined` (§5.6).
 
 ---
 
@@ -433,6 +434,21 @@ sequenceDiagram
 - **Métrica:** `card.data.cards.expired` (contador de tarjetas vencidas por el job).
 - **Desactivarlo:** `card.data.expiration.cron: "-"`.
 
+
+### 5.6 Bloqueo por fraude desde los pagos
+
+`PaymentDeclinedConsumer` consume `payment.processing.declined` (grupo `card-data-payment-consumer`). Si el `responseCode` es `59` (fraude), `FraudDeclineService` hace todo en una transacción:
+
+1. Registra el `eventId` en `card_data_processed_events` (§6.6). Si ya estaba, no hace nada más.
+2. Si la tarjeta está `ACTIVE` o `ISSUED`, la bloquea como `BLOCKED_FRAUD`, con el motivo `Bloqueo automático por pago rechazado por fraude (transacción …)`.
+3. Encola `card.blocked` (`FRAUD`, autor `system`, `previousStatus`).
+
+- En otro estado (ya bloqueada, cancelada, vencida) o si la tarjeta no existe, solo registra el evento.
+- Los demás rechazos (`51`, `55`…) se ignoran.
+- Errores: reintentos y después `dlq.payment-events`, sin reproceso automático.
+- Métrica: `card.data.fraud.declines{outcome}`.
+- Detalle en [EVENTS.md §6.1](EVENTS.md).
+
 ---
 
 ## 6. Persistencia
@@ -523,6 +539,10 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 | `findByStatus` | Por estado (sin endpoint) |
 | `findCardsRequiringRenewal` | `ACTIVE` que vencen este mes o el siguiente (sin endpoint) |
 | `lockExpiredBatch` | Lote de tarjetas vencidas por fecha que todavía no están en `EXPIRED`, con `FOR UPDATE SKIP LOCKED` (job de vencimiento, §5.5) |
+
+### 6.6 Tabla `card_data_processed_events`
+
+Eventos de Kafka que card-data ya procesó (V16): `event_id` (PK), `topic` y `processed_at`. `ProcessedEventAdapter` registra el `eventId` en la misma transacción que el efecto del evento (`MANDATORY`). Si ya estaba, el evento se descarta (§5.6).
 
 ---
 
@@ -625,6 +645,10 @@ Cambiar el PIN no publica ningún evento.
 | `card.data.expiration.cron` | `0 5 0 * * *` (job de vencimiento, §5.5; `-` lo desactiva) |
 | `card.data.expiration.zone` | `America/Argentina/Buenos_Aires` (zona del cron y del mes en curso) |
 | `card.data.expiration.batch-size` | `100` (tarjetas por transacción) |
+| `card.data.payments.consumer.enabled` | `true` (bloqueo por fraude, §5.6) |
+| `card.data.payments.consumer.group-id` | `card-data-payment-consumer` |
+| `card.data.payments.consumer.auto-offset-reset` | `latest` (primer arranque: no reprocesa rechazos viejos) |
+| `card.data.payments.consumer.max-retries` / `initial-interval-ms` | `4` / `1000` (1 s, 2 s, 4 s, 8 s; después `dlq.payment-events`) |
 | `management.endpoints.web.exposure.include` | `health,info,metrics` |
 
 El perfil `card-data` (`application-card-data.yml`) agrega logging a archivo (`logs/card-data.log`), métricas Prometheus y la configuración de SpringDoc. Es el perfil que activa `docker-compose`.

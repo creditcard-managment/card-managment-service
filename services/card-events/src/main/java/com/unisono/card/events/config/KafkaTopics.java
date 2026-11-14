@@ -52,6 +52,8 @@ public final class KafkaTopics {
     // ========================================
 
     public static final String DLQ_CARD_EVENTS = "dlq.card-events";
+    /** Eventos de pago que card-data no pudo procesar (bloqueo por fraude) */
+    public static final String DLQ_PAYMENT_EVENTS = "dlq.payment-events";
     /** Sin uso: card-limits no consume eventos */
     public static final String DLQ_LIMIT_EVENTS = "dlq.limit-events";
 }

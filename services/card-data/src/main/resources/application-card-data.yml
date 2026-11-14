@@ -139,6 +139,15 @@ card:
       send-timeout-ms: 15000     # Espera por evento; debe superar delivery.timeout.ms + max.block.ms del productor
       retention-days: 7          # Días que se conservan los eventos publicados
       cleanup-cron: "0 0 3 * * *" # Limpieza diaria (los eventos fallidos no se borran)
+    # Bloqueo automático por fraude (PaymentDeclinedConsumer): un payment.processing.declined con
+    # responseCode 59 bloquea la tarjeta como BLOCKED_FRAUD
+    payments:
+      consumer:
+        enabled: true
+        group-id: card-data-payment-consumer
+        auto-offset-reset: latest  # Primer arranque: no reprocesa rechazos viejos retenidos en Kafka
+        max-retries: 4             # Reintentos antes de dlq.payment-events (1 s, 2 s, 4 s, 8 s)
+        initial-interval-ms: 1000
     # Vencimiento de tarjetas por fecha (CardExpirationScheduler): ISSUED, ACTIVE, BLOCKED y BLOCKED_FRAUD
     # con mes de vencimiento anterior al actual pasan a EXPIRED y publican card.expired
     expiration:
