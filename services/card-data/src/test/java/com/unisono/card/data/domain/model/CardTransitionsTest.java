@@ -90,6 +90,31 @@ class CardTransitionsTest {
         assertThat(card.getExpiredAt()).isNotNull();
     }
 
+    @Test
+    void shouldExpireIssuedAndBlockedCards() {
+        Card issued = newCard();
+        issued.updateStatus(CardStatus.APPROVED);
+        issued.updateStatus(CardStatus.ISSUED);
+        Card blocked = activeCard();
+        blocked.block("Pérdida");
+        Card fraud = activeCard();
+        fraud.updateStatus(CardStatus.BLOCKED_FRAUD);
+
+        for (Card card : java.util.List.of(issued, blocked, fraud)) {
+            card.expire();
+            assertThat(card.getStatus()).isEqualTo(CardStatus.EXPIRED);
+            assertThat(card.getExpiredAt()).isNotNull();
+        }
+    }
+
+    @Test
+    void shouldNotExpireCardBeforeIssuance() {
+        Card approved = newCard();
+        approved.updateStatus(CardStatus.APPROVED);
+
+        assertThatThrownBy(approved::expire).isInstanceOf(BusinessRuleException.class);
+    }
+
     private static Card activeCard() {
         Card card = newCard();
         card.updateStatus(CardStatus.APPROVED);

@@ -66,6 +66,9 @@ public enum CardStatus {
 
     /**
      * Verifica si se puede pasar de este estado al estado destino
+     *
+     * Una tarjeta emitida vence al pasar su fecha aunque nunca se haya activado o esté bloqueada:
+     * ISSUED, ACTIVE, BLOCKED y BLOCKED_FRAUD pueden pasar a EXPIRED.
      */
     public boolean canTransitionTo(CardStatus target) {
         if (target == null) {
@@ -74,9 +77,9 @@ public enum CardStatus {
         return switch (this) {
             case REQUESTED -> target == APPROVED || target == REJECTED;
             case APPROVED -> target == ISSUED || target == CANCELLED;
-            case ISSUED -> target == ACTIVE || target.isBlocked() || target == CANCELLED;
+            case ISSUED -> target == ACTIVE || target.isBlocked() || target == EXPIRED || target == CANCELLED;
             case ACTIVE -> target.isBlocked() || target == EXPIRED || target == CANCELLED;
-            case BLOCKED, BLOCKED_FRAUD -> target == ACTIVE || target == CANCELLED;
+            case BLOCKED, BLOCKED_FRAUD -> target == ACTIVE || target == EXPIRED || target == CANCELLED;
             case REJECTED, CANCELLED, EXPIRED -> false;
         };
     }

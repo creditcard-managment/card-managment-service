@@ -183,7 +183,10 @@ stateDiagram-v2
     ACTIVE --> CANCELLED: POST /cancel
     BLOCKED --> CANCELLED: POST /cancel
     BLOCKED_FRAUD --> CANCELLED: POST /cancel
-    ACTIVE --> EXPIRED
+    ISSUED --> EXPIRED: job de vencimiento
+    ACTIVE --> EXPIRED: job de vencimiento
+    BLOCKED --> EXPIRED: job de vencimiento
+    BLOCKED_FRAUD --> EXPIRED: job de vencimiento
     REJECTED --> [*]
     CANCELLED --> [*]
     EXPIRED --> [*]
@@ -195,9 +198,9 @@ El detalle de las transiciones y quién las orquesta está en [LIFECYCLE.md](LIF
 |---|---|
 | `REQUESTED` | `APPROVED`, `REJECTED` |
 | `APPROVED` | `ISSUED`, `CANCELLED` |
-| `ISSUED` | `ACTIVE`, `BLOCKED`, `BLOCKED_FRAUD`, `CANCELLED` |
+| `ISSUED` | `ACTIVE`, `BLOCKED`, `BLOCKED_FRAUD`, `EXPIRED`, `CANCELLED` |
 | `ACTIVE` | `BLOCKED`, `BLOCKED_FRAUD`, `EXPIRED`, `CANCELLED` |
-| `BLOCKED`, `BLOCKED_FRAUD` | `ACTIVE`, `CANCELLED` |
+| `BLOCKED`, `BLOCKED_FRAUD` | `ACTIVE`, `EXPIRED`, `CANCELLED` |
 | `REJECTED`, `CANCELLED`, `EXPIRED` | — (finales) |
 
 El bloqueo desde `ISSUED` sigue a `CardStatus.canBlock()`; la state machine de card-lifecycle solo lo prevé desde `ACTIVE`.
@@ -416,6 +419,19 @@ sequenceDiagram
 - **Desbloqueo**: `POST /{cardId}/unblock` también reinicia el contador, para que la tarjeta no se vuelva a bloquear con el primer error.
 - Con la tarjeta bloqueada, validar o cambiar el PIN responde **422**.
 
+### 5.5 Vencimiento por fecha
+
+`CardExpirationScheduler` corre todos los días a las 00:05 (hora de Argentina) y vence las tarjetas cuyo mes de vencimiento ya pasó. Una tarjeta 11/26 es válida hasta el 30/11/2026 inclusive y vence en la ejecución del 1/12.
+
+1. `CardExpirationService.expireBatch` abre una transacción y toma hasta `batch-size` tarjetas con `lockExpiredBatch`: no eliminadas, con estado `ISSUED`, `ACTIVE`, `BLOCKED` o `BLOCKED_FRAUD` (los que `CardStatus` deja pasar a `EXPIRED`) y `expiration_year × 12 + expiration_month` menor que el mes en curso. Usa `FOR UPDATE SKIP LOCKED`, así que varias instancias no vencen dos veces la misma tarjeta.
+2. Por cada una: `Card.expire()` (registra `expiredAt`), guarda y encola `card.expired` en el outbox, en la misma transacción. Motivo `Vencimiento por fecha (MM/YY)`, autor `system`.
+3. Repite con lotes nuevos hasta que uno sale incompleto. Si un lote falla, se revierte entero y el job se detiene hasta la próxima ejecución.
+
+- **Atrasadas:** si el job no corre un día (servicio caído), la ejecución siguiente vence también las del día anterior: la condición es "antes del mes en curso", no "el mes pasado".
+- **Zona horaria:** `card.data.expiration.zone` define tanto el horario del cron como el mes en curso.
+- **Métrica:** `card.data.cards.expired` (contador de tarjetas vencidas por el job).
+- **Desactivarlo:** `card.data.expiration.cron: "-"`.
+
 ---
 
 ## 6. Persistencia
@@ -495,6 +511,7 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 | `findByCardNumberEncrypted` | Búsqueda por PAN cifrado |
 | `findByStatus` | Por estado (sin endpoint) |
 | `findCardsRequiringRenewal` | `ACTIVE` que vencen este mes o el siguiente (sin endpoint) |
+| `lockExpiredBatch` | Lote de tarjetas vencidas por fecha que todavía no están en `EXPIRED`, con `FOR UPDATE SKIP LOCKED` (job de vencimiento, §5.5) |
 
 ---
 
@@ -540,9 +557,9 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 | `CardBlockedEvent` | `card.blocked` | → `BLOCKED` / `BLOCKED_FRAUD`, incluido el bloqueo automático por PIN | — |
 | `CardUnblockedEvent` | `card.unblocked` | Bloqueada → `ACTIVE` | — |
 | `CardCancelledEvent` | `card.cancelled` | → `CANCELLED` | — |
-| `CardExpiredEvent` | `card.expired` | → `EXPIRED` (`PUT /status`; también registra `expiredAt`) | — |
+| `CardExpiredEvent` | `card.expired` | → `EXPIRED` (job diario de vencimiento, autor `system`, o `PUT /status`; registra `expiredAt`) | — |
 
-Hoy nada vence tarjetas automáticamente: `EXPIRED` solo se alcanza con `PUT /status`. Los contratos están en [EVENTS.md §4](EVENTS.md). Ejemplo de payload (JSON, sin headers de tipo):
+Los contratos están en [EVENTS.md §4](EVENTS.md). Ejemplo de payload (JSON, sin headers de tipo):
 
 ```json
 {
@@ -594,6 +611,9 @@ Cambiar el PIN no publica ningún evento.
 | `card.data.outbox.send-timeout-ms` | `15000` (debe superar `delivery.timeout.ms` + `max.block.ms`) |
 | `card.data.outbox.retention-days` | `7` (días que se conservan los eventos publicados) |
 | `card.data.outbox.cleanup-cron` | `0 0 3 * * *` (limpieza diaria) |
+| `card.data.expiration.cron` | `0 5 0 * * *` (job de vencimiento, §5.5; `-` lo desactiva) |
+| `card.data.expiration.zone` | `America/Argentina/Buenos_Aires` (zona del cron y del mes en curso) |
+| `card.data.expiration.batch-size` | `100` (tarjetas por transacción) |
 | `management.endpoints.web.exposure.include` | `health,info,metrics` |
 
 El perfil `card-data` (`application-card-data.yml`) agrega logging a archivo (`logs/card-data.log`), métricas Prometheus y la configuración de SpringDoc. Es el perfil que activa `docker-compose`.
@@ -619,6 +639,8 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-data-service
 
 Comportamientos actuales del código que conviene tener presentes:
 
-1. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay, pero ninguno de persistencia ni de integración, aunque Testcontainers ya está declarado en el `pom.xml`. `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
+1. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay; de persistencia, solo el del vencimiento contra PostgreSQL (`CardExpirationPersistenceTest`, Testcontainers). `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
 2. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.
 3. **PIN en claro en tránsito fuera de los adelantos.** La emisión (`PUT /card-data`), el cambio de PIN (`reset-pin`) y la activación desde card-lifecycle (`validate-pin` con `pin`) siguen recibiendo el PIN en claro. Solo los adelantos (payment-processing) usan PIN block.
+4. **Sin control de concurrencia optimista en `cards`.** Las escrituras no usan `@Version`: si un `PUT /status` (o un bloqueo) lee la tarjeta mientras el job de vencimiento la vence, puede pisar el `EXPIRED`. La tarjeta queda en el estado del request y la ejecución del día siguiente la vuelve a vencer (se publican los dos eventos).
+

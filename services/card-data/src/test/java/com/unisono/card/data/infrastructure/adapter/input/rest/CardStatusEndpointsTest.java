@@ -412,6 +412,11 @@ class CardStatusEndpointsTest {
         }
 
         @Override
+        public List<Card> lockExpiredBatch(java.time.YearMonth currentMonth, int limit) {
+            throw new UnsupportedOperationException("not used by the REST endpoints");
+        }
+
+        @Override
         public void delete(CardId cardId) {
             cards.remove(cardId.getValue());
         }

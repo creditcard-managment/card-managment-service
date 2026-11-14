@@ -133,6 +133,20 @@ class SpringStateMachineAdapterTest {
     }
 
     @Test
+    void expiresFromEveryIssuedStateButNotBeforeIssuance() {
+        for (CardLifecycleState from : java.util.List.of(CardLifecycleState.ISSUED, CardLifecycleState.ACTIVE,
+                CardLifecycleState.BLOCKED, CardLifecycleState.BLOCKED_FRAUD)) {
+            assertThat(adapter.fire(CARD_ID, from, CardLifecycleEvent.EXPIRE, context))
+                    .as("%s -> EXPIRED", from)
+                    .isEqualTo(CardLifecycleState.EXPIRED);
+        }
+
+        assertThatThrownBy(() ->
+                adapter.fire(CARD_ID, CardLifecycleState.APPROVED, CardLifecycleEvent.EXPIRE, context))
+                .isInstanceOf(InvalidStateTransitionException.class);
+    }
+
+    @Test
     void rejectsOnlyFromRequested() {
         assertThat(adapter.fire(CARD_ID, CardLifecycleState.REQUESTED, CardLifecycleEvent.REJECT, context))
                 .isEqualTo(CardLifecycleState.REJECTED);
