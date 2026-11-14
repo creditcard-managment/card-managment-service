@@ -55,6 +55,12 @@ public class Card {
     private Boolean deleted = false;
     private LocalDateTime deletedAt;
 
+    /**
+     * Versión de la fila en la base (control de concurrencia optimista). Nula hasta que la tarjeta se guarda por
+     * primera vez; la asigna el repositorio con {@link #syncVersion(Long)}.
+     */
+    private Long version;
+
     // =============================================
     // FACTORY METHOD
     // =============================================
@@ -107,7 +113,8 @@ public class Card {
             String blockReason,
             String cancelledReason,
             Boolean deleted,
-            LocalDateTime deletedAt
+            LocalDateTime deletedAt,
+            Long version
     ) {
         return Card.builder()
                 .id(id)
@@ -133,7 +140,16 @@ public class Card {
                 .cancelledReason(cancelledReason)
                 .deleted(deleted != null ? deleted : false)
                 .deletedAt(deletedAt)
+                .version(version)
                 .build();
+    }
+
+    /**
+     * Actualiza la versión después de guardar, para que un segundo guardado de la misma instancia en la misma
+     * operación no se tome como un cambio concurrente. Solo la usa el repositorio.
+     */
+    public void syncVersion(Long version) {
+        this.version = version;
     }
 
     private static void validateCreationParameters(

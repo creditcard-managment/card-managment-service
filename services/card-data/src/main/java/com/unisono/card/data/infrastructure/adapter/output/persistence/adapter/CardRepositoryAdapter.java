@@ -53,8 +53,10 @@ public class CardRepositoryAdapter implements CardRepository {
         // Convertir Domain → Entity
         CardEntity entity = mapper.toEntity(card, encryptedCardNumber, encryptedCvv);
 
-        // Guardar en BD
-        CardEntity savedEntity = jpaRepository.save(entity);
+        // Guardar en BD. saveAndFlush: el UPDATE (y el chequeo de versión) se ejecuta acá, así un conflicto
+        // falla antes de encolar eventos y la versión devuelta ya es la nueva
+        CardEntity savedEntity = jpaRepository.saveAndFlush(entity);
+        card.syncVersion(savedEntity.getVersion());
 
         // Convertir Entity → Domain (desencriptando)
         String decryptedCardNumber = savedEntity.getCardNumberEncrypted() != null ?

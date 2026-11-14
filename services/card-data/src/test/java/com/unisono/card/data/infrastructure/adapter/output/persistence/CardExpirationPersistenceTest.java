@@ -1,47 +1,15 @@
 package com.unisono.card.data.infrastructure.adapter.output.persistence;
 
-import com.unisono.card.data.domain.model.CardCategory;
-import com.unisono.card.data.domain.model.CardType;
-import com.unisono.card.data.domain.port.output.EncryptionPort;
-import com.unisono.card.data.domain.service.CardEventEmitter;
 import com.unisono.card.data.domain.service.CardExpirationService;
-import com.unisono.card.data.infrastructure.adapter.output.persistence.adapter.CardRepositoryAdapter;
-import com.unisono.card.data.infrastructure.adapter.output.persistence.adapter.OutboxEventAdapter;
-import com.unisono.card.data.infrastructure.adapter.output.persistence.entity.CardEntity;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.entity.OutboxEventEntity;
-import com.unisono.card.data.infrastructure.adapter.output.persistence.mapper.CardEntityMapper;
-import com.unisono.card.data.infrastructure.adapter.output.persistence.repository.JpaCardRepository;
-import com.unisono.card.data.infrastructure.adapter.output.persistence.repository.JpaOutboxEventRepository;
-import com.unisono.card.events.config.EventSerializationConfig;
 import com.unisono.card.events.config.KafkaTopics;
 import com.unisono.card.shared.domain.valueobject.CardId;
 import com.unisono.card.shared.domain.valueobject.CardStatus;
-import com.unisono.card.shared.infrastructure.security.BCryptHashingService;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.boot.autoconfigure.domain.EntityScan;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -51,74 +19,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Vencimiento contra un PostgreSQL real (Testcontainers): la consulta por fecha y estado, FOR UPDATE SKIP LOCKED
  * y el card.expired en el outbox en la misma transacción. El esquema lo genera Hibernate a partir de las
- * entidades (las migraciones viven en card-management-database). Sin Docker, los tests se saltean.
+ * entidades (ver CardDataPostgresTest).
  */
-@Testcontainers(disabledWithoutDocker = true)
-@DataJpaTest
-@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Transactional(propagation = Propagation.NOT_SUPPORTED)
-class CardExpirationPersistenceTest {
-
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
-
-    static {
-        POSTGRES.start();
-    }
+class CardExpirationPersistenceTest extends CardDataPostgresTest {
 
     private static final YearMonth DECEMBER_2026 = YearMonth.of(2026, 12);
 
-    /**
-     * Configuración propia: CardDataApplication declara un @ComponentScan explícito que levantaría toda la app
-     */
-    @Configuration
-    @EntityScan(basePackageClasses = CardEntity.class)
-    @EnableJpaRepositories(basePackageClasses = JpaCardRepository.class)
-    @Import({CardRepositoryAdapter.class, CardEntityMapper.class, OutboxEventAdapter.class, CardEventEmitter.class,
-            CardExpirationService.class})
-    static class Config {
-        @Bean
-        ObjectMapper objectMapper() {
-            return EventSerializationConfig.objectMapper();
-        }
-    }
-
-    @DynamicPropertySource
-    static void datasource(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
-        registry.add("spring.datasource.username", POSTGRES::getUsername);
-        registry.add("spring.datasource.password", POSTGRES::getPassword);
-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
-    }
-
-    @Autowired
-    private JpaCardRepository cards;
-
-    @Autowired
-    private JpaOutboxEventRepository outbox;
-
-    @Autowired
-    private CardRepositoryAdapter adapter;
-
     @Autowired
     private CardExpirationService service;
-
-    @Autowired
-    private PlatformTransactionManager transactionManager;
-
-    @MockBean
-    private EncryptionPort encryptionPort;
-
-    @MockBean
-    private BCryptHashingService hashingService;
-
-    private TransactionTemplate tx;
-
-    @BeforeEach
-    void clean() {
-        tx = new TransactionTemplate(transactionManager);
-        outbox.deleteAll();
-        cards.deleteAll();
-    }
 
     @Test
     void locksOnlyCardsThatExpiredBeforeTheCurrentMonthAndCanExpire() {
@@ -190,28 +98,5 @@ class CardExpirationPersistenceTest {
         assertThat(other.get(10, TimeUnit.SECONDS)).hasSize(1);
         assertThat(mine).hasSize(1).doesNotContainAnyElementsOf(other.get());
         assertThat(List.of(mine.get(0), other.get().get(0))).containsExactlyInAnyOrder(first, second);
-    }
-
-    private CardStatus status(String id) {
-        return cards.findById(id).orElseThrow().getStatus();
-    }
-
-    private String save(CardStatus status, Integer month, Integer year) {
-        String id = UUID.randomUUID().toString();
-        cards.save(CardEntity.builder()
-                .id(id)
-                .clientId("12345678")
-                .holderFirstName("Juan")
-                .holderLastName("Pérez")
-                .holderDocumentNumber("12345678")
-                .holderEmail("juan@example.com")
-                .holderBirthDate(LocalDate.of(1990, 1, 1))
-                .type(CardType.VISA)
-                .category(CardCategory.CLASSIC)
-                .status(status)
-                .expirationMonth(month)
-                .expirationYear(year)
-                .build());
-        return id;
     }
 }

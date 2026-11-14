@@ -153,6 +153,14 @@ public class CardEntity {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    /**
+     * Control de concurrencia optimista: cada UPDATE exige la versión leída y la incrementa. Si otra transacción
+     * cambió la fila mientras tanto, el guardado falla con ObjectOptimisticLockingFailureException (409).
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     // =============================================
     // HELPER METHODS
     // =============================================
