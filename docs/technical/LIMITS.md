@@ -260,6 +260,8 @@ Los dos montos son opcionales (> 0 si se envían). Se valida la combinación fin
 
 Respuesta **200** `CreditLimitResponse`. `description` es obligatoria; solo se guarda en `credit_operations` cuando viene `operationId`.
 
+**Estado de la tarjeta.** Los consumos (`consume-purchase`, `consume-cash-advance`) exigen que la tarjeta esté `ACTIVE` y no eliminada: si no, **422**. Se controla después de la idempotencia, así que repetir un `operationId` ya aplicado responde 200 aunque la tarjeta se haya bloqueado después. Restauración, liberación y cancelación no miran el estado: los reversos, devoluciones y pagos de una tarjeta bloqueada, cancelada o vencida tienen que poder aplicarse.
+
 **Operaciones idempotentes (`operationId`, opcional, hasta 64 caracteres).** payment-processing lo envía siempre ([PAYMENT.md §4.7](PAYMENT.md)):
 
 - Un consumo o una restauración con `operationId` se registra en `credit_operations` con lo que movió: deltas de lo consumido, del cupo diario y del mensual, y la fecha en que se aplicó.
@@ -289,6 +291,7 @@ Respuesta **200** siempre que exista el límite (aunque la operación se rechace
 
 Orden en que se evalúan los motivos de rechazo:
 
+0. Tarjeta no activa (`"La tarjeta no está activa"`).
 1. Límite de compras (o de adelantos).
 2. Crédito disponible.
 3. Límite diario.
@@ -310,7 +313,7 @@ Mismo formato que `card-data`:
 | `ValidationException` (incluye `InvalidValueObjectException`) | 400 | Montos fuera de rango en los VO, monto cero, moneda inválida |
 | `MethodArgumentNotValidException` | 400 + `fieldErrors` | Bean Validation |
 | `CreditOperationCancelledException` | 409 | Llega un consumo o una restauración cuyo `operationId` ya se canceló (anulado) |
-| `BusinessRuleException` | 422 | Monedas distintas, tarjeta no elegible, límite duplicado, crédito insuficiente, límite diario o mensual excedido, reducción por debajo de lo consumido o del límite de adelantos, pago mayor a lo consumido, diario mayor al mensual |
+| `BusinessRuleException` | 422 | Monedas distintas, tarjeta no elegible o no activa al consumir, límite duplicado, crédito insuficiente, límite diario o mensual excedido, reducción por debajo de lo consumido o del límite de adelantos, pago mayor a lo consumido, diario mayor al mensual |
 | Otras | 500 | — |
 
 > Las anotaciones OpenAPI de los endpoints de consumo dicen “400 crédito insuficiente”, pero el código devuelve **422**.
@@ -503,7 +506,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 3. **Adelantos no acumulativos.** No se registra cuánto se usó en adelantos: cada adelanto se compara contra el tope completo, así que varios adelantos pueden superarlo en total.
 4. ~~**Liberar más de lo consumido da 500.**~~ Resuelto: `releaseCredit` responde 422 si el pago supera lo consumido y `ConsumedCredit` no admite negativos.
 5. **Asignaciones bajas fallan.** Con el 30% por defecto, cualquier límite de compras menor a ARS 1.666,67 da un tope de adelantos menor al mínimo de ARS 500 y la asignación se rechaza. Tampoco se puede asignar sin adelantos: `0` se convierte en 30%.
-6. **No se valida el estado de la tarjeta al consumir ni al validar.** Una tarjeta bloqueada, cancelada o vencida puede seguir consumiendo crédito.
+6. ~~**No se valida el estado de la tarjeta al consumir ni al validar.**~~ Resuelto: consumos (422) y `validate/*` (`approved: false`) exigen tarjeta `ACTIVE`; restauración, liberación y cancelación no (§4.4).
 7. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor. Ya se valida diario ≤ mensual y que ambos sean > 0; falta decidir si se acotan al límite de compras.
 8. **Sin reserva (hold).** Validar y consumir son operaciones separadas: no hay reserva de fondos ni confirmación posterior.
 9. **Registro de movimientos incompleto.** Solo los consumos y restauraciones con `operationId` quedan en `credit_operations`. Los que llegan sin id y las liberaciones (pago del resumen) no dejan registro ni son idempotentes.

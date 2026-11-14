@@ -39,8 +39,9 @@ public class CreditLimitUseCaseConfig {
      */
     @Bean
     public CreditValidationService creditValidationService(
-            CreditLimitRepository creditLimitRepository
+            CreditLimitRepository creditLimitRepository,
+            CardValidationPort cardValidationPort
     ) {
-        return new CreditValidationService(creditLimitRepository);
+        return new CreditValidationService(creditLimitRepository, cardValidationPort);
     }
 }
