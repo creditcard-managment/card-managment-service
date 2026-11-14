@@ -37,6 +37,16 @@ card-lifecycle:
     retry:
       max-retries: 4
       initial-interval-ms: 1000
+    # Reproceso automático de dlq.card-events (DeadLetterRedriver): reinyecta cada mensaje en su topic
+    # después de 1, 2, 4, 8 y 16 min desde que entró a la DLQ (~31 min en total); los ilegibles y los que
+    # agotan los intentos quedan en la DLQ para revisión manual
+    dlq-redrive:
+      enabled: true
+      max-attempts: 5
+      initial-delay-ms: 60000
+      multiplier: 2
+      send-timeout-ms: 10000
+      retry-interval-ms: 5000
 
 server:
   port: 8083
