@@ -16,7 +16,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -37,12 +36,12 @@ class OutboxPaymentEventPublisherTest {
     @Mock
     private PaymentEventTopicResolver topicResolver;
 
-    private final ObjectMapper objectMapper = Jackson2ObjectMapperBuilder.json().build();
+    private final ObjectMapper objectMapper = com.unisono.card.events.config.EventSerializationConfig.objectMapper();
     private OutboxPaymentEventPublisher publisher;
 
     @BeforeEach
     void setUp() {
-        publisher = new OutboxPaymentEventPublisher(repository, topicResolver, objectMapper);
+        publisher = new OutboxPaymentEventPublisher(repository, topicResolver, new PaymentIntegrationEventMapper());
     }
 
     @Test
@@ -60,13 +59,20 @@ class OutboxPaymentEventPublisherTest {
         assertThat(entity.getEventId()).isEqualTo(event.getEventId());
         assertThat(entity.getAggregateId()).isEqualTo(CARD_ID.getValue());
         assertThat(entity.getTopic()).isEqualTo("payment.reversal.completed");
-        assertThat(entity.getEventType()).isEqualTo("PaymentReversed");
+        assertThat(entity.getEventType()).isEqualTo("PaymentReversedEvent");
         assertThat(entity.getPublishedAt()).isNull();
 
         JsonNode payload = objectMapper.readTree(entity.getPayload());
         assertThat(payload.path("eventId").asText()).isEqualTo(event.getEventId());
         assertThat(payload.path("reversalReason").asText()).isEqualTo("Cliente");
-        assertThat(payload.path("transactionId").toString()).contains(transactionId.toString());
+        // Contrato plano de card-events: ids como texto y monto en campos simples, sin Value Objects anidados
+        assertThat(payload.path("transactionId").asText()).isEqualTo(transactionId.toString());
+        assertThat(payload.path("cardId").asText()).isEqualTo(CARD_ID.getValue());
+        assertThat(payload.path("amount").decimalValue()).isEqualByComparingTo("1500");
+        assertThat(payload.path("currency").asText()).isEqualTo("ARS");
+        assertThat(payload.path("eventType").asText()).isEqualTo("PaymentReversedEvent");
+        assertThat(objectMapper.readValue(entity.getPayload(),
+                com.unisono.card.events.domain.payment.PaymentReversedEvent.class).getReversalReason()).isEqualTo("Cliente");
     }
 
     @Test
