@@ -74,14 +74,14 @@ Estado según el código actual de los servicios:
 | `CREDIT_LIMIT_UPDATED` | `credit-limit.updated` | `CreditLimitUpdatedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_CONSUMED` | `credit-limit.consumed` | `CreditLimitConsumedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_RELEASED` | `credit-limit.released` | — | — | — | Solo topic |
-| `PAYMENT_INITIATED` | `payment.processing.initiated` | `PaymentInitiated` (payment-processing) | payment-processing | — | ✅ Se publica, ver §6 |
-| `PAYMENT_AUTHORIZED` | `payment.processing.authorized` | `PaymentAuthorized` | payment-processing | — | ✅ Se publica |
-| `PAYMENT_PROCESSED` | `payment.processing.completed` | `PaymentProcessed` | payment-processing | — | ✅ Se publica |
-| `PAYMENT_DECLINED` | `payment.processing.declined` | `PaymentDeclined` | payment-processing | — | ✅ Se publica |
-| `PAYMENT_REVERSED` | `payment.reversal.completed` | `PaymentReversed` | payment-processing | — | ✅ Se publica |
-| `REFUND_INITIATED` | `payment.refund.initiated` | `RefundInitiated` | payment-processing | — | ✅ Se publica |
-| `REFUND_PROCESSED` | `payment.refund.processed` | `RefundProcessed` | payment-processing | — | ✅ Se publica |
-| `TRANSACTION_SETTLED` | `payment.settlement.completed` | `TransactionSettled` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_INITIATED` | `payment.processing.initiated` | `PaymentInitiatedEvent` | payment-processing | — | ✅ Se publica, ver §6 |
+| `PAYMENT_AUTHORIZED` | `payment.processing.authorized` | `PaymentAuthorizedEvent` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_PROCESSED` | `payment.processing.completed` | `PaymentProcessedEvent` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_DECLINED` | `payment.processing.declined` | `PaymentDeclinedEvent` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_REVERSED` | `payment.reversal.completed` | `PaymentReversedEvent` | payment-processing | — | ✅ Se publica |
+| `REFUND_INITIATED` | `payment.refund.initiated` | `RefundInitiatedEvent` | payment-processing | — | ✅ Se publica |
+| `REFUND_PROCESSED` | `payment.refund.processed` | `RefundProcessedEvent` | payment-processing | — | ✅ Se publica |
+| `TRANSACTION_SETTLED` | `payment.settlement.completed` | `TransactionSettledEvent` | payment-processing | — | ✅ Se publica |
 | `PAYMENT_DEFAULT` | `payment.events` | — | — | — | Destino de un evento de pago sin topic propio (no debería usarse) |
 | `DLQ_CARD_EVENTS` | `dlq.card-events` | Mensaje original, sin modificar | card-lifecycle | — | ✅ En uso, ver §5.3 |
 | `DLQ_LIMIT_EVENTS` | `dlq.limit-events` | — | — | — | Reservado: nadie consume eventos de límites |
@@ -320,25 +320,38 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 ## 6. Eventos de `payment-processing`
 
-`payment-processing` reutiliza solo la clase base `DomainEvent` de esta librería. Sus eventos viven en `com.unisono.card.payment.domain.event`: se acumulan en el aggregate `Transaction` y los servicios de aplicación los publican después de guardar (`publishAll(getDomainEvents())` + `clearDomainEvents()`). La publicación va por un outbox propio (`payment_outbox_events`): `OutboxPaymentEventPublisher` los guarda en la misma transacción y `PaymentOutboxRelay` los envía después del commit ([PAYMENT.md §4.7](PAYMENT.md)).
+Hay dos capas:
 
-| Evento | Topic (default) | Campos | ¿Se genera? |
+- **Eventos de dominio** (`com.unisono.card.payment.domain.event`, en payment-processing): se acumulan en el aggregate `Transaction`, usan Value Objects (`TransactionId`, `CardId`, `TransactionAmount`) y nunca salen del servicio. Los servicios de aplicación los publican después de guardar (`publishAll(getDomainEvents())` + `clearDomainEvents()`).
+- **Contratos de integración** (`com.unisono.card.events.domain.payment`, en esta librería): campos planos (`String`, `BigDecimal`, `LocalDateTime`), con `@JsonCreator`, igual que los de tarjeta. Son lo que se publica en Kafka. Un consumidor los lee con estas clases o como JSON, sin depender del dominio de pagos.
+
+`OutboxPaymentEventPublisher` traduce cada evento de dominio a su contrato (`PaymentIntegrationEventMapper`), lo serializa con `EventSerializationConfig` y lo guarda en el outbox (`payment_outbox_events`) en la misma transacción. `PaymentOutboxRelay` lo envía después del commit ([PAYMENT.md §4.7](PAYMENT.md)). El contrato conserva el `eventId` y el `occurredOn` del evento de dominio.
+
+| Contrato | Topic | Campos (además de `eventId`, `occurredOn`, `eventType`) | Cuándo |
 |---|---|---|---|
-| `PaymentInitiated` | `payment.processing.initiated` | `transactionId`, `cardId`, `amount`, `type`, `initiatedAt` | Sí |
-| `PaymentAuthorized` | `payment.processing.authorized` | `transactionId`, `cardId`, `authorizationCode`, `riskScore`, `authorizedAt` | Sí |
-| `PaymentProcessed` | `payment.processing.completed` | `transactionId`, `cardId`, `amount`, `status`, `processedAt` | Sí |
-| `PaymentDeclined` | `payment.processing.declined` | `transactionId`, `cardId`, `declineReason`, `declinedAt` | Sí |
-| `PaymentReversed` | `payment.reversal.completed` | `transactionId`, `cardId`, `amount`, `reversalReason`, `reversedAt` | Sí |
-| `RefundInitiated` | `payment.refund.initiated` | `refundTransactionId`, `originalTransactionId`, `cardId`, `amount`, `initiatedAt` | Sí |
-| `RefundProcessed` | `payment.refund.processed` | `refundTransactionId`, `originalTransactionId`, `cardId`, `amount`, `processedAt` | Sí (`approveRefund()`) |
-| `TransactionSettled` | `payment.settlement.completed` | `transactionId`, `cardId`, `amount`, `settledAt` | Sí |
-| *(desconocido)* | `payment.events` | — | Topic por defecto de `PaymentEventTopicResolver` |
+| `PaymentInitiatedEvent` | `payment.processing.initiated` | `transactionId`, `cardId`, `transactionType`, montos (*), `initiatedAt` | Al crear una compra o un adelanto, también si después se rechaza |
+| `PaymentAuthorizedEvent` | `payment.processing.authorized` | `transactionId`, `cardId`, `authorizationCode`, `riskScore`, `authorizedAt` | El autorizador aprobó |
+| `PaymentProcessedEvent` | `payment.processing.completed` | `transactionId`, `cardId`, `status`, montos, `processedAt` | Compra o captura aprobada |
+| `PaymentDeclinedEvent` | `payment.processing.declined` | `transactionId`, `cardId`, `responseCode`, `declineReason`, `declinedAt` | Rechazo. `responseCode` es el código ISO 8583: `51` fondos, `54` vencida, `55` PIN, `59` fraude, `62` restringida, `N7` CVV, o el del autorizador |
+| `PaymentReversedEvent` | `payment.reversal.completed` | `transactionId`, `cardId`, montos, `reversalReason`, `reversedAt` | Reverso (incluida la expiración de una preautorización) |
+| `RefundInitiatedEvent` | `payment.refund.initiated` | `refundTransactionId`, `originalTransactionId`, `cardId`, montos, `initiatedAt` | Al crear una devolución |
+| `RefundProcessedEvent` | `payment.refund.processed` | `refundTransactionId`, `originalTransactionId`, `cardId`, montos, `processedAt` | Devolución aprobada |
+| `TransactionSettledEvent` | `payment.settlement.completed` | `transactionId`, `cardId`, montos, `settledAt` | Liquidación |
+
+(*) **Montos:** `amount` y `currency` son lo que se le cobra a la tarjeta (el monto efectivo, en moneda local si hubo conversión). `originalAmount`, `originalCurrency` y `exchangeRate` solo vienen informados si hubo conversión; si no, son `null`.
+
+```json
+{
+  "eventId": "…", "occurredOn": "2026-11-13T10:15:30", "eventType": "PaymentDeclinedEvent",
+  "transactionId": "6f1c2d3e-…", "cardId": "550e8400-…", "responseCode": "59",
+  "declineReason": "Suspected fraud", "declinedAt": "2026-11-13T10:15:30"
+}
+```
 
 Características propias:
 
 - Los nombres de los topics salen de `KafkaTopics` (§3) y se pueden pisar con `spring.kafka.topics.*`. `KafkaPaymentConfig` los declara como `NewTopic` con 3 particiones y replication factor `KAFKA_TOPIC_REPLICATION_FACTOR`: 2 por defecto, 1 en docker-compose, que tiene un solo broker.
-- **Key = `cardId`**: todos los eventos implementan `PaymentEvent` (`getCardId()`), así que los de una tarjeta, y los de cada una de sus transacciones, quedan en la misma partición y en orden. Entrega *at-least-once*: deduplicar por `eventId`.
-- Los campos son Value Objects (`TransactionId`, `CardId`, `TransactionAmount`), así que en el JSON aparecen como objetos anidados (por ejemplo `"cardId": { "value": "…" }`), a diferencia de los eventos de tarjeta, que usan `String`.
+- **Key = `cardId`**: los eventos de una tarjeta, y los de cada una de sus transacciones, quedan en la misma partición y en orden. Entrega *at-least-once*: deduplicar por `eventId`.
 - **Ningún servicio consume estos topics** hoy.
 
 ---
@@ -387,7 +400,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 1. Crear la clase en `com.unisono.card.events.domain`, extendiendo `DomainEvent`, con campos `final` de tipos simples (`String`, números, `LocalDateTime`). No incluir datos sensibles (PAN, CVV, PIN).
 2. Agregar dos constructores: uno `@JsonCreator` con `@JsonProperty` para todos los campos, incluidos `eventId` y `occurredOn` (llama a `super(eventId, occurredOn)`), y otro de negocio que llame a `super()`.
 3. Agregar el nombre del topic a `KafkaTopics` siguiendo la convención `<dominio>.<hecho>`.
-4. En el productor, encolarlo con `EventOutboxPort.enqueue(topic, aggregateId, event)` dentro de la transacción del caso de uso (en card-data; en payment-processing basta con agregarlo al aggregate y publicarlo con `PaymentEventPublisher`, que va por su outbox). El id del aggregate es la key del mensaje y preserva el orden.
+4. En el productor, encolarlo con `EventOutboxPort.enqueue(topic, aggregateId, event)` dentro de la transacción del caso de uso (card-data). En payment-processing, el contrato va en `com.unisono.card.events.domain.payment`: se agrega el evento de dominio al aggregate, su traducción a `PaymentIntegrationEventMapper` y su topic a `PaymentEventTopicResolver`. El id del aggregate (o el `cardId`) es la key del mensaje y preserva el orden.
 5. En el consumidor, hacer el ack solo tras procesar con éxito, propagar las excepciones para que actúe el error handler y manejar duplicados con `eventId`.
 6. Agregar el evento a `EventContractTest` y documentarlo en este archivo (§3 y §4).
 
@@ -399,6 +412,4 @@ docker exec -it card-management-kafka kafka-console-consumer \
 2. **Nada vence tarjetas.** `card.expired` existe y se publica cuando una tarjeta pasa a `EXPIRED`, pero solo se llega ahí con `PUT /status`: no hay un proceso que venza las tarjetas al llegar su fecha (`Card.expire()` no se usa y el evento `EXPIRE` de la state machine de card-lifecycle no tiene un caso de uso).
 3. **DLQ sin reproceso automático** (ver §5.3): reinyectar mensajes es manual y un corte largo de la base puede llenarla. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
 4. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
-5. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclined` (código `59`); no hay un evento de fraude propio.
-6. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
-7. **Formatos mezclados:** los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados (ver el punto 6).
+5. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.

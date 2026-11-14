@@ -519,7 +519,8 @@ Ver el catálogo completo en [EVENTS.md §6](EVENTS.md). Resumen:
 
 - Los eventos salen del outbox (`payment_outbox_events`) a través de `PaymentOutboxRelay`, después del commit (§4.7). At-least-once: el consumidor deduplica por `eventId`.
 - Key = **card id**: los eventos de una tarjeta (y de cada una de sus transacciones) quedan en la misma partición y en orden. Todos los eventos implementan `PaymentEvent` (`getCardId()`).
-- Payload: el JSON que serializa el `ObjectMapper` de Spring al guardar el evento. El relay lo envía tal cual.
+- Payload: el **contrato de integración** de card-events (`com.unisono.card.events.domain.payment`, campos planos), no el evento de dominio. `PaymentIntegrationEventMapper` traduce cada evento conservando `eventId` y `occurredOn`, y se serializa con `EventSerializationConfig`, igual que los eventos de tarjeta. El relay lo envía tal cual. Detalle en [EVENTS.md §6](EVENTS.md).
+- `PaymentDeclinedEvent` incluye el `responseCode` del rechazo (`51`, `55`, `59`, …).
 - `acks=all`, idempotente, 3 reintentos, `lz4`, `linger.ms=10`, sin type headers. Timeouts acotados (`request.timeout.ms=5000`, `delivery.timeout.ms=10000`, `max.block.ms=5000`) para que cada envío se resuelva antes de que el relay deje de esperar (`payment.outbox.send-timeout-ms=16000`).
 - `KafkaPaymentConfig` declara los 8 topics con **3 particiones** (`KAFKA_TOPIC_PARTITIONS`) y **replication factor 2** (`KAFKA_TOPIC_REPLICATION_FACTOR`). En docker-compose, con un solo broker, el factor es 1: si supera la cantidad de brokers, los topics no se crean al arrancar (`InvalidReplicationFactorException`).
 - Nadie consume todavía estos topics.

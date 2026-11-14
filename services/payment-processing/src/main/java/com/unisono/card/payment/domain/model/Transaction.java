@@ -294,6 +294,7 @@ public class Transaction {
         addDomainEvent(new PaymentDeclined(
                 this.transactionId,
                 this.cardId,
+                declinedCode.getResponseCode(),
                 reason,
                 LocalDateTime.now()
         ));

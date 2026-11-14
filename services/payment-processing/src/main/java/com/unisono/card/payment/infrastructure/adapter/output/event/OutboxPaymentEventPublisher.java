@@ -2,6 +2,7 @@ package com.unisono.card.payment.infrastructure.adapter.output.event;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.unisono.card.events.config.EventSerializationConfig;
 import com.unisono.card.events.domain.DomainEvent;
 import com.unisono.card.payment.domain.event.PaymentEvent;
 import com.unisono.card.payment.domain.port.output.PaymentEventPublisher;
@@ -18,6 +19,10 @@ import java.time.LocalDateTime;
 /**
  * Publica los eventos de pagos a través del outbox (tabla payment_outbox_events)
  *
+ * Lo que se guarda (y se publica) es el contrato de integración de card-events con campos planos
+ * ({@link PaymentIntegrationEventMapper}), serializado con {@link EventSerializationConfig}, igual que los
+ * eventos de tarjeta. El evento de dominio solo define el topic y la key.
+ *
  * El evento se guarda en la misma transacción que la transacción de pago: si no confirma, el evento
  * no existe. {@link PaymentOutboxRelay} lo publica en Kafka después del commit (at-least-once), con el
  * card id como key: los eventos de una tarjeta quedan en la misma partición y en orden.
@@ -29,7 +34,8 @@ public class OutboxPaymentEventPublisher implements PaymentEventPublisher {
 
     private final JpaPaymentOutboxEventRepository repository;
     private final PaymentEventTopicResolver topicResolver;
-    private final ObjectMapper objectMapper;
+    private final PaymentIntegrationEventMapper integrationEvents;
+    private final ObjectMapper objectMapper = EventSerializationConfig.objectMapper();
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
@@ -40,12 +46,13 @@ public class OutboxPaymentEventPublisher implements PaymentEventPublisher {
         }
 
         String topic = topicResolver.resolveTopicForEvent(event);
+        DomainEvent contract = integrationEvents.toIntegrationEvent(event);
         PaymentOutboxEventEntity entity = PaymentOutboxEventEntity.builder()
-                .eventId(event.getEventId())
+                .eventId(contract.getEventId())
                 .aggregateId(keyOf(event))
                 .topic(topic)
-                .eventType(event.getEventType())
-                .payload(serialize(event))
+                .eventType(contract.getEventType())
+                .payload(serialize(contract))
                 .createdAt(LocalDateTime.now())
                 .build();
 
