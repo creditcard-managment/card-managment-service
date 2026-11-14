@@ -77,7 +77,7 @@ Estado según el código actual de los servicios:
 | `PAYMENT_INITIATED` | `payment.processing.initiated` | `PaymentInitiatedEvent` | payment-processing | — | ✅ Se publica, ver §6 |
 | `PAYMENT_AUTHORIZED` | `payment.processing.authorized` | `PaymentAuthorizedEvent` | payment-processing | — | ✅ Se publica |
 | `PAYMENT_PROCESSED` | `payment.processing.completed` | `PaymentProcessedEvent` | payment-processing | — | ✅ Se publica |
-| `PAYMENT_DECLINED` | `payment.processing.declined` | `PaymentDeclinedEvent` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_DECLINED` | `payment.processing.declined` | `PaymentDeclinedEvent` | payment-processing | card-data (bloqueo por fraude, §6.1) | ✅ En uso |
 | `PAYMENT_REVERSED` | `payment.reversal.completed` | `PaymentReversedEvent` | payment-processing | — | ✅ Se publica |
 | `REFUND_INITIATED` | `payment.refund.initiated` | `RefundInitiatedEvent` | payment-processing | — | ✅ Se publica |
 | `REFUND_PROCESSED` | `payment.refund.processed` | `RefundProcessedEvent` | payment-processing | — | ✅ Se publica |
@@ -420,6 +420,30 @@ Características propias:
 - **Key = `cardId`**: los eventos de una tarjeta, y los de cada una de sus transacciones, quedan en la misma partición y en orden. Entrega *at-least-once*: deduplicar por `eventId`.
 - **Ningún servicio consume estos topics** hoy.
 
+
+### 6.1 Consumidor: bloqueo por fraude (card-data)
+
+`PaymentDeclinedConsumer` (card-data) consume `payment.processing.declined`. Un rechazo con `responseCode` `59` (fraude) bloquea la tarjeta como `BLOCKED_FRAUD`; los demás rechazos (fondos, PIN, vencida…) se confirman sin hacer nada.
+
+```mermaid
+flowchart LR
+    P[payment-processing<br/>rechazo 59] --> K[(payment.processing.declined)]
+    K --> C[PaymentDeclinedConsumer]
+    C -->|otro código| A[ack]
+    C -->|59| S[FraudDeclineService]
+    S -->|eventId ya procesado| A
+    S -->|ACTIVE / ISSUED| B[BLOCKED_FRAUD<br/>+ card.blocked]
+    S -->|otro estado| A
+    B --> H[card-lifecycle<br/>historial]
+```
+
+- **Una transacción:** `FraudDeclineService` registra el `eventId` en `card_data_processed_events` (V16), bloquea la tarjeta y encola `card.blocked` (`blockType` `FRAUD`, autor `system`, motivo con el id de la transacción). Ese `card.blocked` deja la fila en el historial de card-lifecycle (§5.1).
+- **Idempotente:** un evento repetido o reinyectado no vuelve a bloquear, aunque un operador haya desbloqueado la tarjeta mientras tanto.
+- **Solo bloquea** tarjetas `ACTIVE` o `ISSUED`. Si ya está bloqueada, cancelada o vencida, registra el evento y no la toca. Una tarjeta con bloqueo común no se pasa a fraude.
+- **Grupo propio** `card-data-payment-consumer`, con `auto.offset.reset=latest`: al desplegarlo por primera vez no bloquea tarjetas por rechazos viejos retenidos en Kafka.
+- **Errores:** reintentos con espera exponencial (1 s, 2 s, 4 s y 8 s) y después `dlq.payment-events`. Un JSON ilegible va a la DLQ sin reintentos. Esa DLQ no tiene reproceso automático: hay que reinyectar a mano en `payment.processing.declined`.
+- **Métrica:** `card.data.fraud.declines{outcome}` (`blocked`, `not_blockable`, `card_not_found`, `duplicate`).
+
 ---
 
 ## 7. Infraestructura Kafka
@@ -454,7 +478,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 | Entrega al broker | *At-least-once*: `acks=all` + idempotencia del productor + reintentos del relay. Un evento puede llegar dos veces con el mismo `eventId`: si la instancia cae entre el envío y el commit, o si un envío ya estaba en vuelo cuando el productor lo dio por vencido y el broker lo escribe igual (ocurre con cortes del broker). |
 | Orden | Por tarjeta dentro de cada topic `card.*`, `payment.*` y `credit-limit.*` (key `cardId`). No hay orden entre topics distintos. |
 | Procesamiento en el consumidor | *At-least-once*: ack manual después de procesar. |
-| Idempotencia del consumidor | card-lifecycle descarta duplicados de `card.created`: cada tarjeta tiene una sola transición `CREATE` (verificación previa + índice único `uq_state_transitions_create`). |
+| Idempotencia del consumidor | card-lifecycle descarta duplicados de `card.created` (una sola transición `CREATE` por tarjeta, índice único `uq_state_transitions_create`) y de los cambios de estado (`event_id` único). card-data registra cada `payment.processing.declined` procesado en `card_data_processed_events`. |
 | Errores en el consumidor | Reintentos con espera exponencial y, si no alcanza, DLQ (§5.3). Un JSON ilegible va a la DLQ sin reintentos. |
 | Versionado de esquema | No hay campo de versión. `eventType` es el nombre de la clase Java, así que renombrar una clase rompe a los consumidores. |
 | Zona horaria | `occurredOn` y demás fechas son `LocalDateTime` sin offset: dependen de la zona del servidor productor. |
@@ -475,4 +499,5 @@ docker exec -it card-management-kafka kafka-console-consumer \
 ## 10. Limitaciones conocidas y deuda técnica
 
 1. **Reproceso de la DLQ acotado** (ver §5.3): `DeadLetterRedriver` reinyecta los mensajes durante unos 31 min; si la causa dura más (o el mensaje es ilegible), quedan en la DLQ y hay que reinyectarlos a mano. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
-2. **Eventos de pago y de límite sin consumidores.** Los `payment.*` y `credit-limit.*` se publican, pero nadie los lee. Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.
+2. **Eventos sin consumidores.** Los `credit-limit.*` y los `payment.*` (salvo `payment.processing.declined`, que usa card-data para el bloqueo por fraude, §6.1) se publican, pero nadie los lee. No hay un evento de fraude propio: el bloqueo depende del `responseCode` `59`.
+3. **`dlq.payment-events` sin reproceso automático** (§6.1): los rechazos por fraude que card-data no pudo procesar quedan ahí hasta que alguien los reinyecta.

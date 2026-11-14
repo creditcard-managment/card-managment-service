@@ -164,6 +164,12 @@
             <artifactId>spring-kafka</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- ✅ Jackson para serialización JSON -->
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>

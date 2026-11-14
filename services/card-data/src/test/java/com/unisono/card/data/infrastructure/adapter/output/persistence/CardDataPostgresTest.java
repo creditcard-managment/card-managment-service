@@ -6,6 +6,8 @@ import com.unisono.card.data.domain.model.CardType;
 import com.unisono.card.data.domain.port.output.EncryptionPort;
 import com.unisono.card.data.domain.service.CardEventEmitter;
 import com.unisono.card.data.domain.service.CardExpirationService;
+import com.unisono.card.data.domain.service.FraudDeclineService;
+import com.unisono.card.data.infrastructure.adapter.output.persistence.adapter.ProcessedEventAdapter;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.adapter.CardRepositoryAdapter;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.adapter.OutboxEventAdapter;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.entity.CardEntity;
@@ -64,7 +66,7 @@ abstract class CardDataPostgresTest {
     @EntityScan(basePackageClasses = CardEntity.class)
     @EnableJpaRepositories(basePackageClasses = JpaCardRepository.class)
     @Import({CardRepositoryAdapter.class, CardEntityMapper.class, OutboxEventAdapter.class, CardEventEmitter.class,
-            CardExpirationService.class})
+            CardExpirationService.class, ProcessedEventAdapter.class, FraudDeclineService.class})
     static class Config {
         @Bean
         ObjectMapper objectMapper() {
@@ -90,6 +92,9 @@ abstract class CardDataPostgresTest {
     CardRepositoryAdapter adapter;
 
     @Autowired
+    com.unisono.card.data.infrastructure.adapter.output.persistence.repository.JpaProcessedEventRepository processedEvents;
+
+    @Autowired
     PlatformTransactionManager transactionManager;
 
     @MockBean
@@ -104,6 +109,7 @@ abstract class CardDataPostgresTest {
     void clean() {
         tx = new TransactionTemplate(transactionManager);
         outbox.deleteAll();
+        processedEvents.deleteAll();
         cards.deleteAll();
     }
 
