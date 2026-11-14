@@ -111,7 +111,7 @@ com.unisono.card.limits
 |---|---|
 | `PurchaseLimit` | Entre **ARS 1.000** y **ARS 10.000.000**. `increase` / `decrease` revalidan el rango. |
 | `CashAdvanceLimit` | Entre **ARS 500** y **ARS 5.000.000**. Se calcula como `purchaseLimit × porcentaje` (0–1, por defecto 0,30). |
-| `ConsumedCredit` | `consume(+)` / `release(−)`. No valida que el resultado sea ≥ 0 (ver §9). |
+| `ConsumedCredit` | `consume(+)` / `release(−)`. Nunca negativo (`ValidationException`); `releaseCredit` rechaza antes con 422 un pago mayor a lo consumido. |
 | `AvailableCredit` | `isSufficientFor(monto)`, `isExhausted()`. |
 | `DailyLimit` | Monto (por defecto **ARS 100.000**), consumido y `resetDate`. Si `resetDate ≠ hoy`, el disponible es el monto completo y el próximo consumo reinicia el contador. |
 | `MonthlyLimit` | Igual que el diario, con `resetMonth` (`YearMonth`). Por defecto **ARS 500.000**. |
@@ -185,8 +185,8 @@ Base: `/api/v1/credit-limits`. Bodies validados con Bean Validation.
 | `cardId` | Obligatorio |
 | `purchaseLimitAmount` | Obligatorio, entre 1.000 y 10.000.000 |
 | `currency` | Obligatorio, 3 letras (en la práctica solo funciona `ARS`, ver §9) |
-| `cashAdvancePercentage` | Opcional, entre 0 y 1, por defecto 0,30 (un `0` explícito también se toma como 0,30) |
-| `dailyLimitAmount`, `monthlyLimitAmount` | Opcionales, ≥ 0; si no se envían quedan 100.000 y 500.000 |
+| `cashAdvancePercentage` | Opcional, entre 0 y 1, por defecto 0,30 (un `0` o `null` explícitos también se toman como 0,30) |
+| `dailyLimitAmount`, `monthlyLimitAmount` | Opcionales, > 0; si no se envían quedan 100.000 y 500.000. El diario final no puede superar al mensual final (422) |
 | `assignedBy` | Obligatorio |
 
 Respuesta **201** → `CreditLimitResponse`.
@@ -238,6 +238,7 @@ Igual que el anterior, pero toma el `cardId` del path. El campo `cardId` del bod
 
 - En `increase` y `decrease`, `amount` es la **diferencia** a sumar o restar.
 - En `update-cash-advance-limit`, `amount` es el **nuevo valor absoluto** del tope.
+- `decrease` responde **422** si el nuevo límite de compras queda por debajo de lo consumido o del límite de adelantos (hay que bajar primero el de adelantos).
 
 `PUT /{creditLimitId}/update-temporal-limits`
 
@@ -245,7 +246,7 @@ Igual que el anterior, pero toma el `cardId` del path. El campo `cardId` del bod
 { "dailyLimitAmount": 150000.00, "monthlyLimitAmount": 600000.00, "currency": "ARS", "reason": "Ajuste de límites temporales", "changedBy": "admin@unisono.com" }
 ```
 
-Los dos montos son opcionales (> 0 si se envían). Todos estos endpoints responden **200** `CreditLimitResponse`.
+Los dos montos son opcionales (> 0 si se envían). Se valida la combinación final: el diario no puede superar al mensual (422); se pueden subir los dos en el mismo request aunque el diario nuevo supere al mensual anterior. Todos estos endpoints responden **200** `CreditLimitResponse`.
 
 ### 4.4 Consumo y liberación
 
@@ -253,7 +254,7 @@ Los dos montos son opcionales (> 0 si se envían). Todos estos endpoints respond
 |---|---|---|
 | `POST /{creditLimitId}/consume-purchase` | `{ "amount": 5000.00, "currency": "ARS", "description": "Compra en Mercado Libre", "operationId": "6f1c…" }` | Consume crédito por una compra |
 | `POST /{creditLimitId}/consume-cash-advance` | ídem | Consume crédito por un adelanto |
-| `POST /{creditLimitId}/release-credit` | `{ "paymentAmount": 10000.00, "currency": "ARS", "description": "Pago de resumen" }` | Libera crédito (pago del resumen) |
+| `POST /{creditLimitId}/release-credit` | `{ "paymentAmount": 10000.00, "currency": "ARS", "description": "Pago de resumen" }` | Libera crédito (pago del resumen). **422** si el pago supera lo consumido (no hay saldo a favor) |
 | `POST /{creditLimitId}/restore-credit` | `{ "amount": 1500.00, "currency": "ARS", "originalTransactionDate": "2026-11-03", "description": "Reverso de …", "operationId": "7a2d…" }` | Deshace un consumo (reverso o devolución): disponible y cupo diario y mensual del período de la transacción original. Si ya se pagó, el excedente no se restaura (se loguea) |
 | `POST /{creditLimitId}/operations/{operationId}/cancel` | — | Deshace exactamente un consumo o una restauración enviados con `operationId` (ver abajo). Responde `{ "operationId", "outcome", "availableCredit", "currency", "overLimitAmount" }` |
 
@@ -270,7 +271,7 @@ Respuesta **200** `CreditLimitResponse`. `description` es obligatoria; solo se g
   - `ALREADY_CANCELLED`: ya estaba cancelada o anulada; no se hace nada.
 - Sin `operationId`, el comportamiento es el anterior: no se registra y repetir el request aplica dos veces.
 
-Consumo, restauración, liberación y cancelación bloquean la fila del límite (`SELECT … FOR UPDATE`) hasta el fin de la transacción, así que se ejecutan de a una por límite.
+Todas las modificaciones (cambios de límites, consumo, restauración, liberación y cancelación) bloquean la fila del límite (`SELECT … FOR UPDATE`) hasta el fin de la transacción, así que se ejecutan de a una por límite.
 
 ### 4.5 Validación (sin consumir)
 
@@ -309,7 +310,7 @@ Mismo formato que `card-data`:
 | `ValidationException` (incluye `InvalidValueObjectException`) | 400 | Montos fuera de rango en los VO, monto cero, moneda inválida |
 | `MethodArgumentNotValidException` | 400 + `fieldErrors` | Bean Validation |
 | `CreditOperationCancelledException` | 409 | Llega un consumo o una restauración cuyo `operationId` ya se canceló (anulado) |
-| `BusinessRuleException` | 422 | Monedas distintas, tarjeta no elegible, límite duplicado, crédito insuficiente, límite diario o mensual excedido, reducción por debajo de lo consumido |
+| `BusinessRuleException` | 422 | Monedas distintas, tarjeta no elegible, límite duplicado, crédito insuficiente, límite diario o mensual excedido, reducción por debajo de lo consumido o del límite de adelantos, pago mayor a lo consumido, diario mayor al mensual |
 | Otras | 500 | — |
 
 > Las anotaciones OpenAPI de los endpoints de consumo dicen “400 crédito insuficiente”, pero el código devuelve **422**.
@@ -494,16 +495,16 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 
 ### 9.1 Críticas
 
-1. **Control de concurrencia parcial.** Consumo, restauración, liberación y cancelación bloquean la fila del límite (`PESSIMISTIC_WRITE`). El resto de las modificaciones (aumentar o reducir límites, límites temporales) sigue siendo leer → modificar → guardar sin `@Version`: una de ellas simultánea con un consumo puede pisarlo (*lost update*).
+1. ~~**Control de concurrencia parcial.**~~ Resuelto: todas las modificaciones bloquean la fila (`PESSIMISTIC_WRITE`). Falta un test de concurrencia contra PostgreSQL (#16).
 2. **Solo funciona en ARS.** Los mínimos y máximos de los VO, `Money.zero()` y los límites diario y mensual por defecto están en ARS. Asignar o consumir en otra moneda se rechaza con 422 (“Cannot operate on different currencies”).
 
 ### 9.2 Reglas de negocio
 
 3. **Adelantos no acumulativos.** No se registra cuánto se usó en adelantos: cada adelanto se compara contra el tope completo, así que varios adelantos pueden superarlo en total.
-4. **Liberar más de lo consumido da 500.** `releaseCredit` no valida que el pago sea ≤ consumido. El dominio lo deja pasar, pero el `CHECK chk_consumed_not_negative` de la migración V2 rechaza el `UPDATE` y el cliente recibe un 500 genérico en lugar de un 422 con un motivo claro.
+4. ~~**Liberar más de lo consumido da 500.**~~ Resuelto: `releaseCredit` responde 422 si el pago supera lo consumido y `ConsumedCredit` no admite negativos.
 5. **Asignaciones bajas fallan.** Con el 30% por defecto, cualquier límite de compras menor a ARS 1.666,67 da un tope de adelantos menor al mínimo de ARS 500 y la asignación se rechaza. Tampoco se puede asignar sin adelantos: `0` se convierte en 30%.
 6. **No se valida el estado de la tarjeta al consumir ni al validar.** Una tarjeta bloqueada, cancelada o vencida puede seguir consumiendo crédito.
-7. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor, y no se valida diario ≤ mensual.
+7. **Límites diario y mensual independientes del límite de compras.** Los defaults (100.000 / 500.000) se aplican aunque el límite de compras sea menor. Ya se valida diario ≤ mensual y que ambos sean > 0; falta decidir si se acotan al límite de compras.
 8. **Sin reserva (hold).** Validar y consumir son operaciones separadas: no hay reserva de fondos ni confirmación posterior.
 9. **Registro de movimientos incompleto.** Solo los consumos y restauraciones con `operationId` quedan en `credit_operations`. Los que llegan sin id y las liberaciones (pago del resumen) no dejan registro ni son idempotentes.
 10. **Sin saldo a favor.** `restore-credit` baja lo consumido como mucho hasta cero. Si la tarjeta ya pagó el consumo que se devuelve, el excedente no se acredita y solo se loguea.

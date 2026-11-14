@@ -36,7 +36,11 @@ public class ConsumedCredit implements Serializable {
             throw new ValidationException("El crédito consumido no puede ser nulo");
         }
 
-        // No puede ser negativo (pero puede ser cero)
+        // No puede ser negativo (pero puede ser cero): la base lo rechaza con chk_consumed_not_negative
+        if (amount.isNegative()) {
+            throw new ValidationException(
+                    String.format("El crédito consumido no puede ser negativo: %s", amount));
+        }
     }
 
     /**

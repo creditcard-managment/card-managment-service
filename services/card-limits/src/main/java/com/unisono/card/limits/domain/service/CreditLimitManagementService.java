@@ -72,19 +72,12 @@ public class CreditLimitManagementService implements
                 command.assignedBy()
         );
 
-        // Actualizar límites temporales si se especifican
-        if (command.dailyLimitAmount() != null) {
-            creditLimit.updateDailyLimit(
+        // Actualizar límites temporales si se especifican (se validan juntos: diario ≤ mensual)
+        if (command.dailyLimitAmount() != null || command.monthlyLimitAmount() != null) {
+            creditLimit.updateTemporalLimits(
                     command.dailyLimitAmount(),
-                    "Límite diario inicial",
-                    command.assignedBy()
-            );
-        }
-
-        if (command.monthlyLimitAmount() != null) {
-            creditLimit.updateMonthlyLimit(
                     command.monthlyLimitAmount(),
-                    "Límite mensual inicial",
+                    "Límites temporales iniciales",
                     command.assignedBy()
             );
         }
@@ -111,7 +104,7 @@ public class CreditLimitManagementService implements
     public CreditLimit increasePurchaseLimit(IncreasePurchaseLimitCommand command) {
         log.info("Increasing purchase limit for: {}", command.creditLimitId());
 
-        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
+        CreditLimit creditLimit = lockCreditLimitOrThrow(command.creditLimitId());
 
         creditLimit.increasePurchaseLimit(
                 command.additionalAmount(),
@@ -137,7 +130,7 @@ public class CreditLimitManagementService implements
     public CreditLimit decreasePurchaseLimit(DecreasePurchaseLimitCommand command) {
         log.info("Decreasing purchase limit for: {}", command.creditLimitId());
 
-        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
+        CreditLimit creditLimit = lockCreditLimitOrThrow(command.creditLimitId());
 
         creditLimit.decreasePurchaseLimit(
                 command.reductionAmount(),
@@ -163,7 +156,7 @@ public class CreditLimitManagementService implements
     public CreditLimit updateCashAdvanceLimit(UpdateCashAdvanceLimitCommand command) {
         log.info("Updating cash advance limit for: {}", command.creditLimitId());
 
-        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
+        CreditLimit creditLimit = lockCreditLimitOrThrow(command.creditLimitId());
 
         creditLimit.updateCashAdvanceLimit(
                 command.newAmount(),
@@ -189,23 +182,14 @@ public class CreditLimitManagementService implements
     public CreditLimit updateTemporalLimits(UpdateTemporalLimitsCommand command) {
         log.info("Updating temporal limits for: {}", command.creditLimitId());
 
-        CreditLimit creditLimit = getCreditLimitOrThrow(command.creditLimitId());
+        CreditLimit creditLimit = lockCreditLimitOrThrow(command.creditLimitId());
 
-        if (command.dailyLimitAmount() != null) {
-            creditLimit.updateDailyLimit(
-                    command.dailyLimitAmount(),
-                    command.reason(),
-                    command.changedBy()
-            );
-        }
-
-        if (command.monthlyLimitAmount() != null) {
-            creditLimit.updateMonthlyLimit(
-                    command.monthlyLimitAmount(),
-                    command.reason(),
-                    command.changedBy()
-            );
-        }
+        creditLimit.updateTemporalLimits(
+                command.dailyLimitAmount(),
+                command.monthlyLimitAmount(),
+                command.reason(),
+                command.changedBy()
+        );
 
         CreditLimit savedLimit = creditLimitRepository.save(creditLimit);
 
@@ -322,6 +306,10 @@ public class CreditLimitManagementService implements
     }
 
     /**
+     * Todas las modificaciones del límite (cambios de límites, consumos, restauraciones, liberaciones y
+     * cancelaciones) leen con {@link #lockCreditLimitOrThrow}: el guardado reescribe la fila completa, así que
+     * sin el lock una modificación concurrente pisaría a la otra (lost update).
+     *
      * Aplica un consumo o una restauración con el límite bloqueado. Con operationId es idempotente:
      * una operación ya aplicada no se repite y una cancelada se rechaza.
      */

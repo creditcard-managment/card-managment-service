@@ -23,14 +23,14 @@ public interface AssignCreditLimitUseCase {
     record AssignCreditLimitCommand(
             CardId cardId,
             Money purchaseLimitAmount,
-            double cashAdvancePercentage,
+            Double cashAdvancePercentage,
             Money dailyLimitAmount,
             Money monthlyLimitAmount,
             String assignedBy
     ) {
         public AssignCreditLimitCommand {
             // Valores por defecto si no se especifican
-            if (cashAdvancePercentage == 0) {
+            if (cashAdvancePercentage == null || cashAdvancePercentage == 0) {
                 cashAdvancePercentage = 0.30; // 30% por defecto
             }
         }

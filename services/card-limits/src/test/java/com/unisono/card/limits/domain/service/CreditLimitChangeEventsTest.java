@@ -31,6 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -143,11 +145,68 @@ class CreditLimitChangeEventsTest {
                 .containsExactly(new java.math.BigDecimal("50000"), new java.math.BigDecimal("200000"));
     }
 
+    @Test
+    void limitChangesLockTheRowToAvoidLostUpdates() {
+        CreditLimit limit = existing();
+
+        service.increasePurchaseLimit(new IncreasePurchaseLimitCommand(limit.getId(), Money.ofARS(1_000), "r", "a"));
+        service.decreasePurchaseLimit(new DecreasePurchaseLimitCommand(limit.getId(), Money.ofARS(1_000), "r", "a"));
+        service.updateCashAdvanceLimit(new UpdateCashAdvanceLimitCommand(limit.getId(), Money.ofARS(1_000), "r", "a"));
+        service.updateTemporalLimits(new UpdateTemporalLimitsCommand(limit.getId(), Money.ofARS(1_000), null, "r", "a"));
+
+        verify(creditLimitRepository, org.mockito.Mockito.times(4)).findByIdForUpdate(limit.getId());
+        verify(creditLimitRepository, never()).findById(any());
+    }
+
+    @Test
+    void dailyAndMonthlyCanBeRaisedTogetherAboveThePreviousMonthly() {
+        CreditLimit limit = existing(); // mensual por defecto 500.000
+
+        service.updateTemporalLimits(new UpdateTemporalLimitsCommand(limit.getId(), Money.ofARS(600_000),
+                Money.ofARS(1_000_000), "Viaje", "cliente"));
+
+        assertThat(limit.getDailyLimit().getAmount()).isEqualTo(Money.ofARS(600_000));
+        assertThat(limit.getMonthlyLimit().getAmount()).isEqualTo(Money.ofARS(1_000_000));
+    }
+
+    @Test
+    void dailyAboveMonthlyIsRejectedAndPublishesNothing() {
+        CreditLimit limit = existing();
+
+        assertThatThrownBy(() -> service.updateTemporalLimits(new UpdateTemporalLimitsCommand(limit.getId(),
+                Money.ofARS(600_000), null, "Viaje", "cliente")))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessageContaining("no puede superar al mensual");
+        assertThat(outbox).isEmpty();
+    }
+
+    @Test
+    void assignmentWithNullCashAdvancePercentageUsesTheDefault() {
+        when(cardValidationPort.cardExists(CARD_ID)).thenReturn(true);
+        when(cardValidationPort.canAssignCreditLimit(CARD_ID)).thenReturn(true);
+
+        CreditLimit limit = service.execute(new AssignCreditLimitCommand(CARD_ID, Money.ofARS(500_000), null,
+                null, null, "admin"));
+
+        assertThat(limit.getCashAdvanceLimit().getAmount()).isEqualTo(Money.ofARS(150_000));
+    }
+
+    @Test
+    void assignmentWithDailyAboveMonthlyIsRejected() {
+        when(cardValidationPort.cardExists(CARD_ID)).thenReturn(true);
+        when(cardValidationPort.canAssignCreditLimit(CARD_ID)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.execute(new AssignCreditLimitCommand(CARD_ID, Money.ofARS(500_000), 0.3,
+                Money.ofARS(300_000), Money.ofARS(200_000), "admin")))
+                .isInstanceOf(BusinessRuleException.class);
+        assertThat(outbox).isEmpty();
+    }
+
     private CreditLimit existing() {
         CreditLimit limit = CreditLimit.assign(CARD_ID, Money.ofARS(500_000), 0.3, "test");
         // Las entradas del historial de la asignación ya están guardadas
         limit.getHistory().forEach(h -> org.springframework.test.util.ReflectionTestUtils.setField(h, "id", 1L));
-        when(creditLimitRepository.findById(limit.getId())).thenReturn(Optional.of(limit));
+        when(creditLimitRepository.findByIdForUpdate(limit.getId())).thenReturn(Optional.of(limit));
         return limit;
     }
 }

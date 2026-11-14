@@ -163,14 +163,24 @@ public class CreditLimit {
     public void decreasePurchaseLimit(Money reductionAmount, String reason, String changedBy) {
         Money previousLimit = this.purchaseLimit.getAmount();
 
-        this.purchaseLimit = this.purchaseLimit.decrease(reductionAmount);
+        PurchaseLimit newLimit = this.purchaseLimit.decrease(reductionAmount);
 
         // Validar que el nuevo límite no sea menor al crédito consumido
-        if (this.purchaseLimit.getAmount().isLessThan(this.consumedCredit.getAmount())) {
+        if (newLimit.getAmount().isLessThan(this.consumedCredit.getAmount())) {
             throw new BusinessRuleException(
                     "No se puede reducir el límite por debajo del crédito consumido actual"
             );
         }
+
+        // Invariante: el límite de adelantos no puede exceder el de compras
+        if (this.cashAdvanceLimit.getAmount().isGreaterThan(newLimit.getAmount())) {
+            throw new BusinessRuleException(String.format(
+                    "No se puede reducir el límite de compras a %s: es menor al límite de adelantos de %s. "
+                            + "Reducir primero el límite de adelantos",
+                    newLimit.getAmount(), this.cashAdvanceLimit.getAmount()));
+        }
+
+        this.purchaseLimit = newLimit;
 
         // ⭐ Registrar en historial
         this.history.add(CreditLimitHistory.recordDecrease(
@@ -218,42 +228,52 @@ public class CreditLimit {
      * Actualiza el límite diario
      */
     public void updateDailyLimit(Money newDailyLimit, String reason, String changedBy) {
-        Money previousLimit = this.dailyLimit.getAmount();
-
-        this.dailyLimit = this.dailyLimit.updateLimit(newDailyLimit);
-
-        // ⭐ Registrar en historial
-        this.history.add(CreditLimitHistory.recordUpdate(
-                this.id,
-                LimitType.DAILY,
-                previousLimit,
-                newDailyLimit,
-                reason,
-                changedBy
-        ));
-
-        touch();
+        updateTemporalLimits(newDailyLimit, null, reason, changedBy);
     }
 
     /**
      * Actualiza el límite mensual
      */
     public void updateMonthlyLimit(Money newMonthlyLimit, String reason, String changedBy) {
-        Money previousLimit = this.monthlyLimit.getAmount();
+        updateTemporalLimits(null, newMonthlyLimit, reason, changedBy);
+    }
 
-        this.monthlyLimit = this.monthlyLimit.updateLimit(newMonthlyLimit);
+    /**
+     * Actualiza el límite diario y/o el mensual (null = no cambia). Valida la combinación final:
+     * ambos mayores a cero y diario ≤ mensual. Así se pueden subir los dos a la vez aunque el diario nuevo
+     * supere al mensual anterior.
+     */
+    public void updateTemporalLimits(Money newDailyLimit, Money newMonthlyLimit, String reason, String changedBy) {
+        Money finalDaily = newDailyLimit != null ? newDailyLimit : this.dailyLimit.getAmount();
+        Money finalMonthly = newMonthlyLimit != null ? newMonthlyLimit : this.monthlyLimit.getAmount();
+        validateTemporalLimitAmount(newDailyLimit, "diario");
+        validateTemporalLimitAmount(newMonthlyLimit, "mensual");
+        if (finalDaily.isGreaterThan(finalMonthly)) {
+            throw new BusinessRuleException(String.format(
+                    "El límite diario (%s) no puede superar al mensual (%s)", finalDaily, finalMonthly));
+        }
 
-        // ⭐ Registrar en historial
-        this.history.add(CreditLimitHistory.recordUpdate(
-                this.id,
-                LimitType.MONTHLY,
-                previousLimit,
-                newMonthlyLimit,
-                reason,
-                changedBy
-        ));
+        if (newDailyLimit != null) {
+            Money previousLimit = this.dailyLimit.getAmount();
+            this.dailyLimit = this.dailyLimit.updateLimit(newDailyLimit);
+            this.history.add(CreditLimitHistory.recordUpdate(
+                    this.id, LimitType.DAILY, previousLimit, newDailyLimit, reason, changedBy));
+        }
+
+        if (newMonthlyLimit != null) {
+            Money previousLimit = this.monthlyLimit.getAmount();
+            this.monthlyLimit = this.monthlyLimit.updateLimit(newMonthlyLimit);
+            this.history.add(CreditLimitHistory.recordUpdate(
+                    this.id, LimitType.MONTHLY, previousLimit, newMonthlyLimit, reason, changedBy));
+        }
 
         touch();
+    }
+
+    private static void validateTemporalLimitAmount(Money amount, String label) {
+        if (amount != null && !amount.isPositive()) {
+            throw new ValidationException(String.format("El límite %s debe ser mayor a cero", label));
+        }
     }
 
 
@@ -333,8 +353,14 @@ public class CreditLimit {
      * Libera crédito (ej: después de un pago)
      */
     public void releaseCredit(Money paymentAmount) {
-        if (paymentAmount == null || paymentAmount.isZero()) {
+        if (paymentAmount == null || !paymentAmount.isPositive()) {
             throw new ValidationException("El monto del pago debe ser mayor a cero");
+        }
+        // No se modela saldo a favor: un pago no puede liberar más de lo consumido
+        if (paymentAmount.isGreaterThan(this.consumedCredit.getAmount())) {
+            throw new BusinessRuleException(String.format(
+                    "El pago de %s supera el crédito consumido de %s",
+                    paymentAmount, this.consumedCredit.getAmount()));
         }
 
         this.consumedCredit = this.consumedCredit.release(paymentAmount);

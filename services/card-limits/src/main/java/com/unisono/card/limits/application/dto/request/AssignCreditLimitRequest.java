@@ -40,11 +40,11 @@ public class AssignCreditLimitRequest {
     @Builder.Default  // ⭐ AGREGAR ESTA ANOTACIÓN
     private Double cashAdvancePercentage = 0.30; // 30% por defecto
 
-    @DecimalMin(value = "0.00", message = "El límite diario no puede ser negativo")
+    @DecimalMin(value = "0.01", message = "El límite diario debe ser mayor a cero")
     @Schema(description = "Límite diario de transacciones (opcional)", example = "100000.00")
     private BigDecimal dailyLimitAmount;
 
-    @DecimalMin(value = "0.00", message = "El límite mensual no puede ser negativo")
+    @DecimalMin(value = "0.01", message = "El límite mensual debe ser mayor a cero")
     @Schema(description = "Límite mensual de transacciones (opcional)", example = "500000.00")
     private BigDecimal monthlyLimitAmount;
 
