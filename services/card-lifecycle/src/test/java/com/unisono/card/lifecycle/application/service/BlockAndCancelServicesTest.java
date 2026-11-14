@@ -128,10 +128,14 @@ class BlockAndCancelServicesTest {
         when(stateMachine.fire(any(), any(), eq(CardLifecycleEvent.REJECT), any()))
                 .thenReturn(CardLifecycleState.REJECTED);
 
-        rejectService.execute(new RejectCardCommand(CARD_ID, "No califica", "admin"));
+        StateTransition transition = rejectService.execute(new RejectCardCommand(CARD_ID, "No califica", "admin"));
 
         verify(cardDataClient).updateStatus(CARD_ID, "REJECTED", "No califica", "admin");
-        assertThat(captured().getToState()).isEqualTo("REJECTED");
+        assertThat(transition.getFromState()).isEqualTo("REQUESTED");
+        assertThat(transition.getToState()).isEqualTo("REJECTED");
+        assertThat(transition.isSuccessful()).isTrue();
+        // La fila exitosa la registra el consumidor de card.rejected (CardStatusEventConsumer), no el servicio
+        verify(transitionRepository, never()).save(any());
     }
 
     private StateTransition captured() {

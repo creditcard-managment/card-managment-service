@@ -101,6 +101,7 @@ public class CardEventConsumer {
                 .successful(true)
                 .errorMessage(null)
                 .metadata("{\"eventId\":\"" + event.getEventId() + "\"}")
+                .eventId(event.getEventId())
                 .build();
 
         StateTransitionEntity saved;

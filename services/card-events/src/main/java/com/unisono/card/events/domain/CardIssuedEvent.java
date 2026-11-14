@@ -12,9 +12,12 @@ import java.time.LocalDateTime;
  */
 @Getter
 @ToString(callSuper = true)
-public class CardIssuedEvent extends DomainEvent {
+public class CardIssuedEvent extends DomainEvent implements CardStatusChange {
 
     private final String cardId;
+
+    /** Estado anterior de la tarjeta (CardStatus); nulo en mensajes anteriores a este campo. */
+    private final String previousStatus;
     private final String lastFourDigits;
     private final Integer expirationMonth;
     private final Integer expirationYear;
@@ -26,6 +29,7 @@ public class CardIssuedEvent extends DomainEvent {
             @JsonProperty("eventId") String eventId,
             @JsonProperty("occurredOn") LocalDateTime occurredOn,
             @JsonProperty("cardId") String cardId,
+            @JsonProperty("previousStatus") String previousStatus,
             @JsonProperty("lastFourDigits") String lastFourDigits,
             @JsonProperty("expirationMonth") Integer expirationMonth,
             @JsonProperty("expirationYear") Integer expirationYear,
@@ -34,6 +38,7 @@ public class CardIssuedEvent extends DomainEvent {
     ) {
         super(eventId, occurredOn);
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.lastFourDigits = lastFourDigits;
         this.expirationMonth = expirationMonth;
         this.expirationYear = expirationYear;
@@ -43,6 +48,7 @@ public class CardIssuedEvent extends DomainEvent {
 
     public CardIssuedEvent(
             String cardId,
+            String previousStatus,
             String lastFourDigits,
             Integer expirationMonth,
             Integer expirationYear,
@@ -51,10 +57,26 @@ public class CardIssuedEvent extends DomainEvent {
     ) {
         super();
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.lastFourDigits = lastFourDigits;
         this.expirationMonth = expirationMonth;
         this.expirationYear = expirationYear;
         this.reason = reason;
         this.issuedBy = issuedBy;
+    }
+
+    @Override
+    public String newStatus() {
+        return "ISSUED";
+    }
+
+    @Override
+    public String actor() {
+        return issuedBy;
+    }
+
+    @Override
+    public LocalDateTime changedAt() {
+        return getOccurredOn();
     }
 }

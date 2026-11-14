@@ -230,6 +230,9 @@ class CardStatusEndpointsTest {
                 KafkaTopics.CARD_APPROVED, KafkaTopics.CARD_ISSUED, KafkaTopics.CARD_ACTIVATED,
                 KafkaTopics.CARD_BLOCKED, KafkaTopics.CARD_UNBLOCKED, KafkaTopics.CARD_CANCELLED);
         assertThat(outbox).extracting(EnqueuedEvent::key).containsOnly(cardId);
+        // Cada evento informa desde qué estado se llegó (card-lifecycle lo guarda como from_state)
+        assertThat(outbox).extracting(e -> ((CardStatusChange) e.event()).getPreviousStatus())
+                .containsExactly("REQUESTED", "APPROVED", "ISSUED", "ACTIVE", "BLOCKED_FRAUD", "ACTIVE");
 
         CardApprovedEvent approved = eventAt(0);
         assertThat(approved.getReason()).isEqualTo("Cumple");

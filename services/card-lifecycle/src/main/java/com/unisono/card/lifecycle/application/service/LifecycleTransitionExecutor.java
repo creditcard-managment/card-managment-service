@@ -22,8 +22,12 @@ import org.springframework.stereotype.Component;
  *   <li>lee el estado real de la tarjeta en card-data;</li>
  *   <li>dispara el evento en la state machine (transición + guards);</li>
  *   <li>ejecuta los efectos en card-data;</li>
- *   <li>registra la transición exitosa con el estado origen real.</li>
+ *   <li>devuelve la transición aplicada, con el estado origen real.</li>
  * </ol>
+ *
+ * La transición exitosa no se guarda acá: card-data publica el evento del cambio (card.approved, card.issued…)
+ * y {@code CardStatusEventConsumer} la registra en state_transitions, igual que los cambios que no pasan por
+ * card-lifecycle. Así cada cambio queda una sola vez en el historial.
  *
  * Si algo falla con una excepción de dominio, registra la transición fallida y la relanza.
  * No es transaccional a propósito: cada guardado de {@code state_transitions} se confirma
@@ -61,9 +65,10 @@ public class LifecycleTransitionExecutor {
 
             effects.apply();
 
-            return transitionRepository.save(StateTransition.createSuccessful(
+            // Sin id: la fila la crea el consumidor del evento que publica card-data
+            return StateTransition.createSuccessful(
                     cardId, currentState.name(), target.name(), event.name(),
-                    context.getReason(), context.getPerformedBy()));
+                    context.getReason(), context.getPerformedBy());
 
         } catch (NotFoundException e) {
             // La tarjeta no existe: no hay a quién asociar la transición fallida (FK a cards).

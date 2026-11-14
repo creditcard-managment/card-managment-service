@@ -13,9 +13,12 @@ import java.time.LocalDateTime;
  */
 @Getter
 @ToString(callSuper = true)
-public class CardBlockedEvent extends DomainEvent {
+public class CardBlockedEvent extends DomainEvent implements CardStatusChange {
 
     private final String cardId;
+
+    /** Estado anterior de la tarjeta (CardStatus); nulo en mensajes anteriores a este campo. */
+    private final String previousStatus;
 
     private final String blockType; // NORMAL, FRAUD
 
@@ -30,6 +33,7 @@ public class CardBlockedEvent extends DomainEvent {
             @JsonProperty("eventId") String eventId,
             @JsonProperty("occurredOn") LocalDateTime occurredOn,
             @JsonProperty("cardId") String cardId,
+            @JsonProperty("previousStatus") String previousStatus,
             @JsonProperty("blockType") String blockType,
             @JsonProperty("blockedAt") LocalDateTime blockedAt,
             @JsonProperty("reason") String reason,
@@ -37,6 +41,7 @@ public class CardBlockedEvent extends DomainEvent {
     ) {
         super(eventId, occurredOn);
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.blockType = blockType;
         this.blockedAt = blockedAt;
         this.reason = reason;
@@ -45,6 +50,7 @@ public class CardBlockedEvent extends DomainEvent {
 
     public CardBlockedEvent(
             String cardId,
+            String previousStatus,
             String blockType,
             LocalDateTime blockedAt,
             String reason,
@@ -52,9 +58,25 @@ public class CardBlockedEvent extends DomainEvent {
     ) {
         super();
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.blockType = blockType;
         this.blockedAt = blockedAt;
         this.reason = reason;
         this.blockedBy = blockedBy;
+    }
+
+    @Override
+    public String newStatus() {
+        return "FRAUD".equals(blockType) ? "BLOCKED_FRAUD" : "BLOCKED";
+    }
+
+    @Override
+    public String actor() {
+        return blockedBy;
+    }
+
+    @Override
+    public LocalDateTime changedAt() {
+        return blockedAt != null ? blockedAt : getOccurredOn();
     }
 }

@@ -9,7 +9,7 @@
 | Puerto | `8083` |
 | Base path REST | `/api/v1/card-lifecycle` |
 | Base de datos | PostgreSQL `card_management_db` — tabla propia `state_transitions`; lee `credit_limits`. No accede a `cards` (la modifica vía `card-data`) |
-| Mensajería | Kafka: consume `card.created` (grupo `card-lifecycle-consumer-group`) y publica en `dlq.card-events` los mensajes que no puede procesar, que después reprocesa solo (`DeadLetterRedriver`) |
+| Mensajería | Kafka: consume `card.created` (grupo `card-lifecycle-consumer-group`) y los ocho eventos de cambio de estado para el historial (grupo `card-lifecycle-consumer-group-history`) y publica en `dlq.card-events` los mensajes que no puede procesar, que después reprocesa solo (`DeadLetterRedriver`) |
 | Integración síncrona | REST hacia `card-data` (`card-data.base-url`, por defecto `http://localhost:8081`): lectura de estado, cambios de estado, datos de emisión, validación de PIN, bloqueo y cancelación |
 | Dependencias internas | `card-shared` (Value Objects, `CardStatus`, excepciones), `card-events` (eventos y topics) |
 | Librerías destacadas | Spring State Machine (`spring-statemachine-core`, `-data-jpa`) |
@@ -32,8 +32,9 @@ flowchart LR
 ```
 
 - Al recibir `card.created` registra la transición inicial `CREATE` (`null → REQUESTED`).
+- Al recibir un evento de cambio de estado (`card.approved` … `card.expired`) registra la transición exitosa, pase o no el cambio por card-lifecycle: bloqueo automático por PIN, `POST /block` directo a card-data o el job de vencimiento (§5.5).
 - Expone endpoints para mover la tarjeta por el ciclo de vida y consultar su historial.
-- Cada transición queda registrada en `state_transitions` con motivo, usuario, fecha y resultado.
+- Cada transición queda registrada en `state_transitions` con motivo, usuario, fecha y resultado. Las exitosas salen de los eventos y las fallidas las registra el servicio al fallar.
 
 ---
 
@@ -85,7 +86,7 @@ Todos delegan en `LifecycleTransitionExecutor`, que aplica siempre la misma secu
 1. Lee el estado real de la tarjeta en `card-data` (`GET /api/v1/cards/{id}`).
 2. Dispara el evento en la state machine posicionada en ese estado (§2.2). Si no hay transición o un guard la rechaza, lanza `InvalidStateTransitionException` y **no se llama a `card-data`**.
 3. Ejecuta los efectos en `card-data` (cambio de estado, datos de emisión, PIN, fecha de activación).
-4. Registra la transición exitosa con el `fromState` real y el destino que devolvió la máquina.
+4. Devuelve la transición aplicada (`fromState` real y destino de la máquina) **sin guardarla**. card-data publica el evento del cambio y `CardStatusEventConsumer` la registra (§5.5), así cada cambio queda una sola vez en el historial. La respuesta del endpoint no trae `id` (es `null`), y el historial muestra el cambio unos milisegundos después.
 
 Si falla cualquier paso con una excepción de dominio, registra una transición fallida (`successful = false`, `to_state` = destino buscado, `error_message` = motivo) y relanza la excepción. Si la tarjeta no existe (404) no se registra nada, porque `state_transitions.card_id` tiene FK a `cards`. Los servicios **no son transaccionales**: cada guardado en `state_transitions` se confirma por separado, así que el registro del fallo no se revierte. Si el guardado del fallo también falla, se loguea y se propaga el error original.
 
@@ -158,7 +159,7 @@ stateDiagram-v2
     EXPIRED --> [*]
 ```
 
-`EXPIRE` no tiene caso de uso en card-lifecycle: las tarjetas las vence el job diario de card-data ([DATA.md §5.5](DATA.md)), que no pasa por este servicio ni deja fila en `state_transitions`. La state machine acepta `EXPIRE` desde los mismos estados que `CardStatus`.
+`EXPIRE` no tiene caso de uso en card-lifecycle: las tarjetas las vence el job diario de card-data ([DATA.md §5.5](DATA.md)). La fila en `state_transitions` llega por `card.expired` (§5.5). La state machine acepta `EXPIRE` desde los mismos estados que `CardStatus`.
 
 **Guards**:
 
@@ -199,7 +200,7 @@ Base: `/api/v1/card-lifecycle`. Todos los bodies se validan con Bean Validation.
 { "reason": "Cliente cumple con requisitos crediticios", "approvedBy": "admin@bank.com" }
 ```
 
-Ambos campos obligatorios. Lee el estado en `card-data`, valida `APPROVE` con la state machine (`ApprovalGuard`), llama a `PUT /status` con `APPROVED` y registra la transición con el estado origen real.
+Ambos campos obligatorios. Lee el estado en `card-data`, valida `APPROVE` con la state machine (`ApprovalGuard`) y llama a `PUT /status` con `APPROVED`. La transición la registra el consumidor de `card.approved` (§5.5).
 
 Respuesta **200**:
 
@@ -213,7 +214,7 @@ Respuesta **200**:
 { "reason": "Cliente no cumple requisitos crediticios", "rejectedBy": "admin@bank.com" }
 ```
 
-Lee el estado en `card-data`, valida `REJECT` con la state machine (solo desde `REQUESTED`), llama a `PUT /status` con `REJECTED` y registra la transición. Respuesta **200** sin cuerpo.
+Lee el estado en `card-data`, valida `REJECT` con la state machine (solo desde `REQUESTED`), llama a `PUT /status` con `REJECTED`; la transición llega por `card.rejected`. Respuesta **200** sin cuerpo.
 
 ### 4.3 `POST /{cardId}/issue` — Emitir
 
@@ -250,7 +251,7 @@ Los tres campos son obligatorios (`pin` de 4 dígitos). Flujo:
 
 1. Lee el estado en `card-data` y valida `ACTIVATE` con la state machine: la tarjeta debe estar `ISSUED` y tener límite de crédito (`ActivationGuard`). Si falla → **422**.
 2. Verifica el PIN con `card-data` `POST /cards/{id}/validate-pin`. Si es incorrecto → **422** `PIN incorrecto: no se puede activar la tarjeta …`. El PIN se verifica **después** de la state machine para no consumir intentos en una activación que igual sería rechazada; cada PIN incorrecto suma un intento en `card-data`, que bloquea la tarjeta al llegar al máximo ([DATA.md](DATA.md)).
-3. `PUT /status` con `ACTIVE` → `PUT /activated-at` con la hora actual → registra la transición.
+3. `PUT /status` con `ACTIVE` → `PUT /activated-at` con la hora actual. La transición llega por `card.activated`.
 
 Respuesta **200** `CardLifecycleResponse` con `status: ACTIVE`.
 
@@ -392,6 +393,25 @@ Mismo mecanismo que §5.2. Como el cambio lo hace `card-data` con sus métodos d
 
 La regla “no se activa una tarjeta sin límite de crédito” la aplica `ActivationGuard` en la state machine, que consulta `CreditLimitAdapter.canActivate()` (existencia de `credit_limits.card_id`). Si la tarjeta no tiene límite, la activación responde **422** con `No se puede activar la tarjeta: debe tener límite de crédito asignado. CardId: …`, queda registrada como transición fallida y no se llega a verificar el PIN ni a llamar a `card-data`.
 
+
+### 5.5 Historial desde los eventos de cambio de estado
+
+`CardStatusEventConsumer` escucha `card.approved`, `card.rejected`, `card.issued`, `card.activated`, `card.blocked`, `card.unblocked`, `card.cancelled` y `card.expired`, con el grupo `card-lifecycle-consumer-group-history`. Por cada mensaje registra una transición exitosa:
+
+| Columna | Valor |
+|---|---|
+| `from_state` | `previousStatus` del evento (nulo en mensajes viejos) |
+| `to_state` | El estado nuevo (`BLOCKED` o `BLOCKED_FRAUD` según `blockType`) |
+| `event` | `APPROVE`, `REJECT`, `ISSUE`, `ACTIVATE`, `BLOCK` / `BLOCK_FRAUD`, `UNBLOCK`, `CANCEL` o `EXPIRE` |
+| `reason` / `performed_by` | Los del evento (`system` si no tiene autor) |
+| `transitioned_at` | La fecha del cambio (`blockedAt`, `expiredAt`…), o `occurredOn` |
+| `event_id` / `metadata` | El `eventId` del mensaje |
+
+- **Fuente única de las exitosas:** también para los cambios que orquesta este servicio (§3). Las fallidas las registra `LifecycleTransitionExecutor`, porque no hay evento.
+- **Idempotente:** si `event_id` ya existe, confirma el mensaje sin registrarlo. Ante una carrera con otro consumo, el índice único decide; otra violación (por ejemplo, la FK a `cards`) es un error.
+- **Primer despliegue:** el grupo arranca en `latest`, así que los eventos retenidos en Kafka, cuyos cambios ya estaban en el historial, no se registran de nuevo. Los cambios hechos fuera de card-lifecycle durante el despliegue pueden quedar sin fila.
+- **Errores:** reintentos, `dlq.card-events` y reproceso automático, igual que `card.created` (§5.1).
+
 ---
 
 ## 6. Persistencia
@@ -410,7 +430,8 @@ La regla “no se activa una tarjeta sin límite de crédito” la aplica `Activ
 | `transitioned_at` | `timestamp` | no | `@CreationTimestamp` |
 | `successful` | `boolean` | no | default `true` |
 | `error_message` | `text` | sí | |
-| `metadata` | `text` | sí | JSON adicional; en `CREATE`, el `eventId` del mensaje |
+| `event_id` | `varchar(36)` | sí | `eventId` del evento que originó la fila; índice único (V14). Nulo en las fallidas |
+| `metadata` | `text` | sí | JSON adicional: `{"eventId":"…"}` en las filas que vienen de un evento |
 
 Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, solo fallidas, última transición, conteo, existencia, por evento y por estado destino. El endpoint solo expone el historial completo.
 
@@ -422,7 +443,7 @@ Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, s
 
 > `cards` (dueño `card-data`) no está mapeada en este módulo: se lee y modifica solo vía REST. La FK `state_transitions.card_id → cards(id)` sigue existiendo.
 >
-> **Esquema:** las tres tablas las crea Flyway desde el repo `card-management-database`: `cards` en V1, `credit_limits` en V2 y `state_transitions` en V3. Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que deben existir antes del arranque.
+> **Esquema:** las tres tablas las crea Flyway desde el repo `card-management-database`: `cards` en V1, `credit_limits` en V2 y `state_transitions` en V3 (`event_id` en V14). Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que deben existir antes del arranque.
 >
 > En V3, `state_transitions.card_id` tiene FK a `cards(id)` (`ON DELETE CASCADE`), `to_state` es `NOT NULL` (por eso las transiciones fallidas guardan el destino buscado) y `event` es `varchar(50)` (la entidad declara 20).
 
@@ -453,6 +474,7 @@ Consultas (`JpaStateTransitionRepository`): por tarjeta (desc), solo exitosas, s
 | `card-data.base-url` | `http://localhost:8081` (default en `CardDataRestClient`) |
 | `card-lifecycle.kafka.retry.max-retries` | `4` (reintentos antes de enviar a la DLQ) |
 | `card-lifecycle.kafka.retry.initial-interval-ms` | `1000` (se duplica en cada reintento) |
+| `card-lifecycle.kafka.history.auto-offset-reset` | `latest` (primer arranque del grupo del historial: no reprocesa eventos viejos, ver §5.5) |
 | `card-lifecycle.kafka.dlq-redrive.*` | Reproceso de la DLQ: `enabled` `true`, `max-attempts` `5`, `initial-delay-ms` `60000`, `multiplier` `2`, `send-timeout-ms` `10000`, `retry-interval-ms` `5000`. Ver [EVENTS.md §5.3](EVENTS.md) |
 
 El perfil `card-lifecycle` (`application-card-lifecycle.yml`, activado por docker-compose) agrega logging a `logs/card-lifecycle.log`, Prometheus, SpringDoc y endpoints de actuator. Las propiedades `card-lifecycle.transitions.*` (timeout, reintentos) y `card-lifecycle.audit.*` (retención) están declaradas pero **ningún código las lee**.

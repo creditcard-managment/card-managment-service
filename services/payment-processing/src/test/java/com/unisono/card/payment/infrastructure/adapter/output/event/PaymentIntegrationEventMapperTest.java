@@ -124,7 +124,7 @@ class PaymentIntegrationEventMapperTest {
 
     @Test
     void shouldRejectEventsWithoutAContract() {
-        DomainEvent foreign = new com.unisono.card.events.domain.CardApprovedEvent("card", "x", "y");
+        DomainEvent foreign = new com.unisono.card.events.domain.CardApprovedEvent("card", "REQUESTED", "x", "y");
 
         assertThatThrownBy(() -> mapper.toIntegrationEvent(foreign)).isInstanceOf(IllegalArgumentException.class);
     }
