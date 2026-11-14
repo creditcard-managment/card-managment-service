@@ -13,9 +13,12 @@ import java.time.LocalDateTime;
  */
 @Getter
 @ToString(callSuper = true)
-public class CardExpiredEvent extends DomainEvent {
+public class CardExpiredEvent extends DomainEvent implements CardStatusChange {
 
     private final String cardId;
+
+    /** Estado anterior de la tarjeta (CardStatus); nulo en mensajes anteriores a este campo. */
+    private final String previousStatus;
 
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private final LocalDateTime expiredAt;
@@ -28,12 +31,14 @@ public class CardExpiredEvent extends DomainEvent {
             @JsonProperty("eventId") String eventId,
             @JsonProperty("occurredOn") LocalDateTime occurredOn,
             @JsonProperty("cardId") String cardId,
+            @JsonProperty("previousStatus") String previousStatus,
             @JsonProperty("expiredAt") LocalDateTime expiredAt,
             @JsonProperty("reason") String reason,
             @JsonProperty("expiredBy") String expiredBy
     ) {
         super(eventId, occurredOn);
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.expiredAt = expiredAt;
         this.reason = reason;
         this.expiredBy = expiredBy;
@@ -41,14 +46,31 @@ public class CardExpiredEvent extends DomainEvent {
 
     public CardExpiredEvent(
             String cardId,
+            String previousStatus,
             LocalDateTime expiredAt,
             String reason,
             String expiredBy
     ) {
         super();
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.expiredAt = expiredAt;
         this.reason = reason;
         this.expiredBy = expiredBy;
+    }
+
+    @Override
+    public String newStatus() {
+        return "EXPIRED";
+    }
+
+    @Override
+    public String actor() {
+        return expiredBy;
+    }
+
+    @Override
+    public LocalDateTime changedAt() {
+        return expiredAt != null ? expiredAt : getOccurredOn();
     }
 }

@@ -37,7 +37,8 @@ import java.util.concurrent.TimeoutException;
  *   <li>No se reprocesan, y quedan en la DLQ para revisión manual: los mensajes ilegibles (JSON inválido,
  *       que nunca van a funcionar), los que agotaron los intentos y los de un topic que este servicio no consume.</li>
  * </ul>
- * El consumidor de card.created es idempotente, así que reinyectar un mensaje ya procesado no tiene efecto.
+ * Los consumidores (card.created y el historial de cambios de estado) son idempotentes, así que reinyectar un
+ * mensaje ya procesado no tiene efecto.
  * Si la publicación falla, el mensaje no se confirma y se reintenta (ver {@code dlqRedriveContainerFactory}).
  */
 @Slf4j
@@ -47,7 +48,7 @@ public class DeadLetterRedriver {
     public static final String REDRIVE_COUNT_HEADER = "x-dlq-redrive-count";
 
     /** Topics cuyo consumidor está en este servicio y manda a dlq.card-events. */
-    private static final Set<String> REDRIVABLE_TOPICS = Set.of(KafkaTopics.CARD_CREATED);
+    private static final Set<String> REDRIVABLE_TOPICS = redrivableTopics();
     private static final String DLT_HEADER_PREFIX = "kafka_dlt-";
 
     private final KafkaTemplate<String, String> kafkaTemplate;
@@ -117,6 +118,12 @@ public class DeadLetterRedriver {
         redriven.increment();
         log.info("Redriven DLQ message {}-{}@{} (key {}) to {}, attempt {}/{}", record.topic(), record.partition(),
                 record.offset(), record.key(), originalTopic, attempts + 1, maxAttempts);
+    }
+
+    private static Set<String> redrivableTopics() {
+        Set<String> topics = new java.util.HashSet<>(CardStatusEventConsumer.TOPICS);
+        topics.add(KafkaTopics.CARD_CREATED);
+        return Set.copyOf(topics);
     }
 
     long delayMs(int attempts) {

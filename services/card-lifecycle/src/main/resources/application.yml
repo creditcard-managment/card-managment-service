@@ -40,6 +40,10 @@ card-lifecycle:
     # Reproceso automático de dlq.card-events (DeadLetterRedriver): reinyecta cada mensaje en su topic
     # después de 1, 2, 4, 8 y 16 min desde que entró a la DLQ (~31 min en total); los ilegibles y los que
     # agotan los intentos quedan en la DLQ para revisión manual
+    # Historial de cambios de estado (CardStatusEventConsumer, grupo <group-id>-history). La primera vez
+    # arranca desde el final de los topics: los cambios anteriores ya están en state_transitions
+    history:
+      auto-offset-reset: latest
     dlq-redrive:
       enabled: true
       max-attempts: 5

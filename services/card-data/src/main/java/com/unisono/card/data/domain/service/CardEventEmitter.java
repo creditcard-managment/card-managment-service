@@ -49,14 +49,15 @@ public class CardEventEmitter {
         String cardId = card.getId().getValue();
         String actor = performedBy == null || performedBy.isBlank() ? SYSTEM_ACTOR : performedBy;
         LocalDateTime now = LocalDateTime.now();
+        String previous = previousStatus != null ? previousStatus.name() : null;
 
         switch (card.getStatus()) {
             case APPROVED -> eventOutbox.enqueue(KafkaTopics.CARD_APPROVED, cardId,
-                    new CardApprovedEvent(cardId, reason, actor));
+                    new CardApprovedEvent(cardId, previous, reason, actor));
             case REJECTED -> eventOutbox.enqueue(KafkaTopics.CARD_REJECTED, cardId,
-                    new CardRejectedEvent(cardId, reason, actor));
+                    new CardRejectedEvent(cardId, previous, reason, actor));
             case ISSUED -> eventOutbox.enqueue(KafkaTopics.CARD_ISSUED, cardId, new CardIssuedEvent(
-                    cardId,
+                    cardId, previous,
                     card.getCardNumber() != null ? card.getCardNumber().getLastFourDigits() : null,
                     card.getExpirationDate() != null ? card.getExpirationDate().getMonth() : null,
                     card.getExpirationDate() != null ? card.getExpirationDate().getYear() : null,
@@ -66,27 +67,27 @@ public class CardEventEmitter {
             case ACTIVE -> {
                 if (previousStatus.isBlocked()) {
                     eventOutbox.enqueue(KafkaTopics.CARD_UNBLOCKED, cardId,
-                            new CardUnblockedEvent(cardId, now, reason, actor));
+                            new CardUnblockedEvent(cardId, previous, now, reason, actor));
                 } else {
                     eventOutbox.enqueue(KafkaTopics.CARD_ACTIVATED, cardId,
-                            new CardActivatedEvent(cardId, now, reason, actor));
+                            new CardActivatedEvent(cardId, previous, now, reason, actor));
                 }
             }
             case BLOCKED, BLOCKED_FRAUD -> eventOutbox.enqueue(KafkaTopics.CARD_BLOCKED, cardId, new CardBlockedEvent(
-                    cardId,
+                    cardId, previous,
                     card.getStatus() == CardStatus.BLOCKED_FRAUD ? "FRAUD" : "NORMAL",
                     card.getBlockedAt() != null ? card.getBlockedAt() : now,
                     reason,
                     actor
             ));
             case CANCELLED -> eventOutbox.enqueue(KafkaTopics.CARD_CANCELLED, cardId, new CardCancelledEvent(
-                    cardId,
+                    cardId, previous,
                     card.getCancelledAt() != null ? card.getCancelledAt() : now,
                     reason,
                     actor
             ));
             case EXPIRED -> eventOutbox.enqueue(KafkaTopics.CARD_EXPIRED, cardId, new CardExpiredEvent(
-                    cardId,
+                    cardId, previous,
                     card.getExpiredAt() != null ? card.getExpiredAt() : now,
                     reason,
                     actor

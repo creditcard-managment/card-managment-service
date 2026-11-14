@@ -13,9 +13,12 @@ import java.time.LocalDateTime;
  */
 @Getter
 @ToString(callSuper = true)
-public class CardCancelledEvent extends DomainEvent {
+public class CardCancelledEvent extends DomainEvent implements CardStatusChange {
 
     private final String cardId;
+
+    /** Estado anterior de la tarjeta (CardStatus); nulo en mensajes anteriores a este campo. */
+    private final String previousStatus;
 
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private final LocalDateTime cancelledAt;
@@ -28,12 +31,14 @@ public class CardCancelledEvent extends DomainEvent {
             @JsonProperty("eventId") String eventId,
             @JsonProperty("occurredOn") LocalDateTime occurredOn,
             @JsonProperty("cardId") String cardId,
+            @JsonProperty("previousStatus") String previousStatus,
             @JsonProperty("cancelledAt") LocalDateTime cancelledAt,
             @JsonProperty("reason") String reason,
             @JsonProperty("cancelledBy") String cancelledBy
     ) {
         super(eventId, occurredOn);
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.cancelledAt = cancelledAt;
         this.reason = reason;
         this.cancelledBy = cancelledBy;
@@ -41,14 +46,31 @@ public class CardCancelledEvent extends DomainEvent {
 
     public CardCancelledEvent(
             String cardId,
+            String previousStatus,
             LocalDateTime cancelledAt,
             String reason,
             String cancelledBy
     ) {
         super();
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.cancelledAt = cancelledAt;
         this.reason = reason;
         this.cancelledBy = cancelledBy;
+    }
+
+    @Override
+    public String newStatus() {
+        return "CANCELLED";
+    }
+
+    @Override
+    public String actor() {
+        return cancelledBy;
+    }
+
+    @Override
+    public LocalDateTime changedAt() {
+        return cancelledAt != null ? cancelledAt : getOccurredOn();
     }
 }

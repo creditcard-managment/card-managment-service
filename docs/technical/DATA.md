@@ -561,16 +561,16 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 | Evento | Topic | Cuándo | Consumidor |
 |---|---|---|---|
 | `CardCreatedEvent` | `card.created` | Alta de tarjeta | `card-lifecycle` (`CardEventConsumer`, idempotente: una sola transición `CREATE` por tarjeta) |
-| `CardApprovedEvent` | `card.approved` | → `APPROVED` | — |
-| `CardRejectedEvent` | `card.rejected` | → `REJECTED` | — |
-| `CardIssuedEvent` | `card.issued` | → `ISSUED` (solo últimos 4 dígitos y vencimiento) | — |
-| `CardActivatedEvent` | `card.activated` | `ISSUED` → `ACTIVE` | — |
-| `CardBlockedEvent` | `card.blocked` | → `BLOCKED` / `BLOCKED_FRAUD`, incluido el bloqueo automático por PIN | — |
-| `CardUnblockedEvent` | `card.unblocked` | Bloqueada → `ACTIVE` | — |
-| `CardCancelledEvent` | `card.cancelled` | → `CANCELLED` | — |
-| `CardExpiredEvent` | `card.expired` | → `EXPIRED` (job diario de vencimiento, autor `system`, o `PUT /status`; registra `expiredAt`) | — |
+| `CardApprovedEvent` | `card.approved` | → `APPROVED` | `card-lifecycle` (`CardStatusEventConsumer`: historial en `state_transitions`, idempotente por `eventId`) |
+| `CardRejectedEvent` | `card.rejected` | → `REJECTED` | `card-lifecycle` (`CardStatusEventConsumer`: historial en `state_transitions`, idempotente por `eventId`) |
+| `CardIssuedEvent` | `card.issued` | → `ISSUED` (solo últimos 4 dígitos y vencimiento) | `card-lifecycle` (`CardStatusEventConsumer`: historial en `state_transitions`, idempotente por `eventId`) |
+| `CardActivatedEvent` | `card.activated` | `ISSUED` → `ACTIVE` | `card-lifecycle` (`CardStatusEventConsumer`: historial en `state_transitions`, idempotente por `eventId`) |
+| `CardBlockedEvent` | `card.blocked` | → `BLOCKED` / `BLOCKED_FRAUD`, incluido el bloqueo automático por PIN | `card-lifecycle` (`CardStatusEventConsumer`: historial en `state_transitions`, idempotente por `eventId`) |
+| `CardUnblockedEvent` | `card.unblocked` | Bloqueada → `ACTIVE` | `card-lifecycle` (`CardStatusEventConsumer`: historial en `state_transitions`, idempotente por `eventId`) |
+| `CardCancelledEvent` | `card.cancelled` | → `CANCELLED` | `card-lifecycle` (`CardStatusEventConsumer`: historial en `state_transitions`, idempotente por `eventId`) |
+| `CardExpiredEvent` | `card.expired` | → `EXPIRED` (job diario de vencimiento, autor `system`, o `PUT /status`; registra `expiredAt`) | `card-lifecycle` (`CardStatusEventConsumer`: historial en `state_transitions`, idempotente por `eventId`) |
 
-Los contratos están en [EVENTS.md §4](EVENTS.md). Ejemplo de payload (JSON, sin headers de tipo):
+Los eventos de cambio de estado llevan `previousStatus`, el estado desde el que se llegó, que `CardEventEmitter` toma del caso de uso. Los contratos están en [EVENTS.md §4](EVENTS.md). Ejemplo de payload (JSON, sin headers de tipo):
 
 ```json
 {

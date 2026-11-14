@@ -51,6 +51,13 @@ public class StateTransitionEntity {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    /**
+     * eventId del evento card.* que originó la transición (V14, único): evita registrarla dos veces.
+     * Nulo en las transiciones fallidas, que no tienen evento.
+     */
+    @Column(name = "event_id", length = 36, unique = true)
+    private String eventId;
+
     @Column(name = "metadata", columnDefinition = "TEXT")
     private String metadata; // Para guardar datos adicionales en formato JSON
 }

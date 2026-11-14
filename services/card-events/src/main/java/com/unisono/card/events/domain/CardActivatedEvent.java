@@ -13,9 +13,12 @@ import java.time.LocalDateTime;
  */
 @Getter
 @ToString(callSuper = true)
-public class CardActivatedEvent extends DomainEvent {
+public class CardActivatedEvent extends DomainEvent implements CardStatusChange {
 
     private final String cardId;
+
+    /** Estado anterior de la tarjeta (CardStatus); nulo en mensajes anteriores a este campo. */
+    private final String previousStatus;
 
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private final LocalDateTime activatedAt;
@@ -28,12 +31,14 @@ public class CardActivatedEvent extends DomainEvent {
             @JsonProperty("eventId") String eventId,
             @JsonProperty("occurredOn") LocalDateTime occurredOn,
             @JsonProperty("cardId") String cardId,
+            @JsonProperty("previousStatus") String previousStatus,
             @JsonProperty("activatedAt") LocalDateTime activatedAt,
             @JsonProperty("reason") String reason,
             @JsonProperty("activatedBy") String activatedBy
     ) {
         super(eventId, occurredOn);
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.activatedAt = activatedAt;
         this.reason = reason;
         this.activatedBy = activatedBy;
@@ -41,14 +46,31 @@ public class CardActivatedEvent extends DomainEvent {
 
     public CardActivatedEvent(
             String cardId,
+            String previousStatus,
             LocalDateTime activatedAt,
             String reason,
             String activatedBy
     ) {
         super();
         this.cardId = cardId;
+        this.previousStatus = previousStatus;
         this.activatedAt = activatedAt;
         this.reason = reason;
         this.activatedBy = activatedBy;
+    }
+
+    @Override
+    public String newStatus() {
+        return "ACTIVE";
+    }
+
+    @Override
+    public String actor() {
+        return activatedBy;
+    }
+
+    @Override
+    public LocalDateTime changedAt() {
+        return activatedAt != null ? activatedAt : getOccurredOn();
     }
 }

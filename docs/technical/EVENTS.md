@@ -62,14 +62,14 @@ Estado según el código actual de los servicios:
 | Constante | Topic | Clase de evento | Productor | Consumidor | Estado |
 |---|---|---|---|---|---|
 | `CARD_CREATED` | `card.created` | `CardCreatedEvent` | card-data | card-lifecycle | ✅ En uso |
-| `CARD_APPROVED` | `card.approved` | `CardApprovedEvent` | card-data | — | ✅ Se publica |
-| `CARD_REJECTED` | `card.rejected` | `CardRejectedEvent` | card-data | — | ✅ Se publica |
-| `CARD_ISSUED` | `card.issued` | `CardIssuedEvent` | card-data | — | ✅ Se publica |
-| `CARD_ACTIVATED` | `card.activated` | `CardActivatedEvent` | card-data | — | ✅ Se publica |
-| `CARD_BLOCKED` | `card.blocked` | `CardBlockedEvent` | card-data | — | ✅ Se publica |
-| `CARD_UNBLOCKED` | `card.unblocked` | `CardUnblockedEvent` | card-data | — | ✅ Se publica |
-| `CARD_CANCELLED` | `card.cancelled` | `CardCancelledEvent` | card-data | — | ✅ Se publica |
-| `CARD_EXPIRED` | `card.expired` | `CardExpiredEvent` | card-data | — | ✅ Se publica (job diario de vencimiento o `PUT /status`) |
+| `CARD_APPROVED` | `card.approved` | `CardApprovedEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
+| `CARD_REJECTED` | `card.rejected` | `CardRejectedEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
+| `CARD_ISSUED` | `card.issued` | `CardIssuedEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
+| `CARD_ACTIVATED` | `card.activated` | `CardActivatedEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
+| `CARD_BLOCKED` | `card.blocked` | `CardBlockedEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
+| `CARD_UNBLOCKED` | `card.unblocked` | `CardUnblockedEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
+| `CARD_CANCELLED` | `card.cancelled` | `CardCancelledEvent` | card-data | card-lifecycle (historial) | ✅ En uso |
+| `CARD_EXPIRED` | `card.expired` | `CardExpiredEvent` | card-data | card-lifecycle (historial) | ✅ En uso (job diario de vencimiento o `PUT /status`) |
 | `CREDIT_LIMIT_ASSIGNED` | `credit-limit.assigned` | `CreditLimitAssignedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_UPDATED` | `credit-limit.updated` | `CreditLimitUpdatedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_CONSUMED` | `credit-limit.consumed` | `CreditLimitConsumedEvent` | — | — | Contrato definido, sin uso |
@@ -123,11 +123,16 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 }
 ```
 
+### Eventos de cambio de estado (4.2 a 4.9)
+
+Los ocho eventos de cambio de estado implementan `CardStatusChange`, que los expone de forma uniforme para el historial de card-lifecycle (§5.1): `getPreviousStatus()`, `newStatus()`, `actor()` (el campo `…By` de cada evento) y `changedAt()` (la fecha propia del evento, o `occurredOn` si no tiene). Solo `previousStatus` es parte del JSON: los otros métodos no siguen la convención `getX`, así que Jackson no los serializa. `previousStatus` es nulo en mensajes publicados antes de que existiera, y los consumidores lo toleran.
+
 ### 4.2 `CardApprovedEvent` — `card.approved`
 
 | Campo | Tipo |
 |---|---|
 | `cardId` | `String` |
+| `previousStatus` | `String` |
 | `reason` | `String` |
 | `approvedBy` | `String` |
 
@@ -136,6 +141,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | Campo | Tipo | Nota |
 |---|---|---|
 | `cardId` | `String` | |
+| `previousStatus` | `String` | Estado anterior (`CardStatus`); nulo en mensajes viejos |
 | `lastFourDigits` | `String` | Solo los últimos 4; el PAN, el CVV y el PIN **no viajan** en el evento |
 | `expirationMonth` | `Integer` | |
 | `expirationYear` | `Integer` | |
@@ -147,6 +153,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | Campo | Tipo | Nota |
 |---|---|---|
 | `cardId` | `String` | |
+| `previousStatus` | `String` | Estado anterior (`CardStatus`); nulo en mensajes viejos |
 | `activatedAt` | `LocalDateTime` (`yyyy-MM-dd'T'HH:mm:ss`) | Hora del cambio de estado en card-data. `cards.activated_at` lo informa card-lifecycle en otra llamada, así que puede diferir por milisegundos |
 | `reason` | `String` | |
 | `activatedBy` | `String` | |
@@ -156,6 +163,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | Campo | Tipo | Nota |
 |---|---|---|
 | `cardId` | `String` | |
+| `previousStatus` | `String` | Estado anterior (`CardStatus`); nulo en mensajes viejos |
 | `blockType` | `String` | `NORMAL` o `FRAUD` (un solo topic para ambos tipos) |
 | `blockedAt` | `LocalDateTime` | |
 | `reason` | `String` | |
@@ -166,6 +174,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | Campo | Tipo |
 |---|---|
 | `cardId` | `String` |
+| `previousStatus` | `String` |
 | `reason` | `String` |
 | `rejectedBy` | `String` |
 
@@ -174,6 +183,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | Campo | Tipo |
 |---|---|
 | `cardId` | `String` |
+| `previousStatus` | `String` |
 | `unblockedAt` | `LocalDateTime` |
 | `reason` | `String` |
 | `unblockedBy` | `String` |
@@ -183,6 +193,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | Campo | Tipo |
 |---|---|
 | `cardId` | `String` |
+| `previousStatus` | `String` |
 | `cancelledAt` | `LocalDateTime` |
 | `reason` | `String` |
 | `cancelledBy` | `String` |
@@ -192,6 +203,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | Campo | Tipo |
 |---|---|
 | `cardId` | `String` |
+| `previousStatus` | `String` |
 | `expiredAt` | `LocalDateTime` |
 | `reason` | `String` |
 | `expiredBy` | `String` |
@@ -212,7 +224,7 @@ Contratos definidos; `card-limits` todavía no los publica ni depende de esta li
 
 ## 5. Flujos implementados
 
-`card.created` es el único evento con consumidor. El resto se publica con el mismo mecanismo (§5.1).
+Todos los eventos de tarjeta tienen consumidor en card-lifecycle: `card.created` abre el historial y los de cambio de estado lo completan (§5.1).
 
 ```mermaid
 sequenceDiagram
@@ -243,7 +255,14 @@ sequenceDiagram
 
 ### 5.1 Eventos de cambio de estado
 
-`card-data` encola el evento en la misma transacción que guarda el cambio (`CardEventEmitter`). Así se publican todos los cambios, también los que no pasan por card-lifecycle, como el bloqueo automático por PIN; y si la operación falla o se rechaza, no se publica nada. Comparten orden por tarjeta porque la key es el `cardId`, y la garantía *at-least-once* del outbox: los consumidores deben deduplicar por `eventId`.
+`card-data` encola el evento en la misma transacción que guarda el cambio (`CardEventEmitter`). Así se publican todos los cambios, también los que no pasan por card-lifecycle, como el bloqueo automático por PIN; y si la operación falla o se rechaza, no se publica nada. Comparten orden por tarjeta porque la key es el `cardId`, y la garantía *at-least-once* del outbox: los consumidores deben deduplicar por `eventId`. Cada evento lleva `previousStatus`.
+
+**Historial (card-lifecycle, `CardStatusEventConsumer`).** Consume los ocho topics y registra cada evento como una transición exitosa en `state_transitions`: `from_state` = `previousStatus`, `to_state` = el estado nuevo, `event` = `APPROVE`, `REJECT`, `ISSUE`, `ACTIVATE`, `BLOCK` / `BLOCK_FRAUD`, `UNBLOCK`, `CANCEL` o `EXPIRE`, y la fecha y el autor del evento.
+- **Fuente única:** es la única fuente de las transiciones exitosas, también de las que orquesta card-lifecycle (aprobar, emitir…), que ya no las guarda al hacerlas. Así cada cambio queda una vez en el historial, pase o no por card-lifecycle. Las fallidas las sigue registrando card-lifecycle porque no generan evento.
+- **Idempotente por `eventId`:** columna `event_id` con índice único `uq_state_transitions_event_id` (V14). Un mensaje repetido se confirma sin registrarlo de nuevo.
+- **Grupo propio:** `card-lifecycle-consumer-group-history`, con `auto.offset.reset=latest` (`card-lifecycle.kafka.history.auto-offset-reset`). Al desplegarlo por primera vez no reprocesa los eventos retenidos, cuyos cambios ya estaban en el historial.
+- **Errores:** el mismo camino que `card.created`: reintentos, `dlq.card-events` y reproceso automático (§5.3).
+- **Consistencia eventual:** el historial refleja el cambio unos milisegundos después de que card-data lo confirma.
 
 | Operación en card-data | Evento |
 |---|---|
@@ -276,7 +295,7 @@ sequenceDiagram
 
 | Parámetro | Valor |
 |---|---|
-| Group id | `card-lifecycle-consumer-group` |
+| Group id | `card-lifecycle-consumer-group` (`card.created`) y `card-lifecycle-consumer-group-history` (cambios de estado, §5.1) |
 | Deserializer key / value | `StringDeserializer` / `StringDeserializer`; el JSON se convierte a mano con `kafkaObjectMapper` |
 | `auto.offset.reset` | `earliest` |
 | `enable.auto.commit` | `false` |
@@ -316,7 +335,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
   --property print.key=true --property print.headers=true
 ```
 
-**Reproceso automático (`DeadLetterRedriver`):** un consumidor propio lee `dlq.card-events` y vuelve a publicar cada mensaje en su topic de origen (header `kafka_dlt-original-topic`), con la misma key y el mismo valor. El consumidor de `card.created` es idempotente, así que reinyectar un mensaje ya procesado no tiene efecto.
+**Reproceso automático (`DeadLetterRedriver`):** un consumidor propio lee `dlq.card-events` y vuelve a publicar cada mensaje en su topic de origen (header `kafka_dlt-original-topic`), con la misma key y el mismo valor. Reprocesa `card.created` y los ocho topics de cambio de estado; los dos consumidores son idempotentes, así que reinyectar un mensaje ya procesado no tiene efecto.
 
 ```mermaid
 flowchart LR
@@ -324,7 +343,7 @@ flowchart LR
     R -->|JSON ilegible, topic desconocido<br/>o intentos agotados| P[Queda en la DLQ<br/>para revisión manual]
     R -->|Todavía no se cumplió la espera| W[Pausa la partición<br/>y lo vuelve a leer]
     W --> R
-    R -->|Se cumplió la espera| T[(card.created)<br/>x-dlq-redrive-count + 1]
+    R -->|Se cumplió la espera| T[(topic de origen)<br/>x-dlq-redrive-count + 1]
     T --> L[CardEventConsumer]
     L -->|Vuelve a fallar| D
 ```
@@ -333,7 +352,7 @@ flowchart LR
 - **Intentos:** el número de reproceso viaja en el header `x-dlq-redrive-count`. Si el mensaje vuelve a fallar, `DeadLetterPublishingRecoverer` copia los headers y lo devuelve a la DLQ con el contador. Al reinyectarlo se sacan los headers `kafka_dlt-*` del paso anterior.
 - **No se reprocesan:** los mensajes ilegibles (el error es un `JsonProcessingException`, nunca van a funcionar), los de un topic que card-lifecycle no consume y los que agotaron `max-attempts`. Se confirman y quedan en la DLQ, con un log `ERROR` y la métrica correspondiente.
 - **Si no puede publicar**, no confirma el mensaje y lo reintenta cada `retry-interval-ms`, sin límite: el contenedor no tiene DLQ propia.
-- **Orden:** un mensaje reprocesado llega a `card.created` después de los que se publicaron mientras tanto. Hoy no importa, porque el único consumidor registra la transición inicial de forma idempotente.
+- **Orden:** un mensaje reprocesado llega a su topic después de los que se publicaron mientras tanto. El historial no se desordena: cada fila toma la fecha del cambio y su `from_state` del propio evento (`previousStatus`), no de la fila anterior.
 
 | Propiedad (`card-lifecycle.kafka.dlq-redrive.*`) | Default |
 |---|---|
@@ -345,7 +364,7 @@ flowchart LR
 
 Métrica `card.lifecycle.dlq.redrive{outcome}`: `redriven`, `parked_unreadable`, `parked_exhausted` y `parked_unknown_topic`. Un `parked_*` que sube requiere revisión.
 
-**Reprocesar a mano** un mensaje que quedó en la DLQ: una vez corregida la causa, volver a publicar el valor en `card.created` con la misma key. Sin el header `x-dlq-redrive-count`, si vuelve a fallar arranca de nuevo con los reprocesos automáticos. La DLQ tiene la retención del broker (7 días, §7).
+**Reprocesar a mano** un mensaje que quedó en la DLQ: una vez corregida la causa, volver a publicar el valor en su topic de origen (header `kafka_dlt-original-topic`) con la misma key. Sin el header `x-dlq-redrive-count`, si vuelve a fallar arranca de nuevo con los reprocesos automáticos. La DLQ tiene la retención del broker (7 días, §7).
 
 ---
 
@@ -439,7 +458,6 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 ## 10. Limitaciones conocidas y deuda técnica
 
-1. **Eventos de tarjeta sin consumidores.** `card.created` es el único que se consume; los demás se publican, pero todavía nadie los lee. Tampoco se crea historial en `state_transitions` para los cambios que no pasan por card-lifecycle, como el bloqueo automático por PIN.
-2. **Reproceso de la DLQ acotado** (ver §5.3): `DeadLetterRedriver` reinyecta los mensajes durante unos 31 min; si la causa dura más (o el mensaje es ilegible), quedan en la DLQ y hay que reinyectarlos a mano. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
-3. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
-4. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.
+1. **Reproceso de la DLQ acotado** (ver §5.3): `DeadLetterRedriver` reinyecta los mensajes durante unos 31 min; si la causa dura más (o el mensaje es ilegible), quedan en la DLQ y hay que reinyectarlos a mano. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
+2. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
+3. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.

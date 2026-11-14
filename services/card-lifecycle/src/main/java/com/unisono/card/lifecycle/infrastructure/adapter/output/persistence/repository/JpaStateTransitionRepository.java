@@ -51,6 +51,11 @@ public interface JpaStateTransitionRepository extends JpaRepository<StateTransit
     boolean existsByCardIdAndEvent(String cardId, String event);
 
     /**
+     * Verifica si ya se registró la transición de un evento card.* (consumo idempotente)
+     */
+    boolean existsByEventId(String eventId);
+
+    /**
      * Busca transiciones por evento
      */
     List<StateTransitionEntity> findByEvent(String event);
