@@ -8,9 +8,9 @@
 | Clase principal | `com.unisono.card.limits.CardLimitsApplication` |
 | Puerto | `8082` |
 | Base path REST | `/api/v1/credit-limits` |
-| Base de datos | PostgreSQL `card_management_db` — tablas propias `credit_limits` y `credit_limit_history`; lee `cards` |
-| Mensajería | Ninguna (no depende de `card-events` ni de Kafka) |
-| Dependencias internas | `card-shared` (`Money`, `CardId`, `CardStatus`, excepciones) |
+| Base de datos | PostgreSQL `card_management_db` — tablas propias `credit_limits`, `credit_limit_history`, `credit_operations` y `credit_limit_outbox_events`; lee `cards` |
+| Mensajería | Kafka, solo como productor: publica `credit-limit.assigned`, `.updated`, `.consumed` y `.released` con un transactional outbox (§6.5). No consume |
+| Dependencias internas | `card-shared` (`Money`, `CardId`, `CardStatus`, excepciones) y `card-events` (contratos `credit-limit.*`, `KafkaTopics`) |
 | Swagger UI | `http://localhost:8082/swagger-ui.html` |
 
 ---
@@ -417,9 +417,19 @@ Operaciones de crédito identificadas por el cliente (V12), una por `operationId
 - `applied_on`: fecha en que se aplicó (define si el cupo diario y mensual todavía se pueden revertir).
 - `description`, `created_at` y `cancelled_at`.
 
-### 6.5 Notas
+### 6.5 `credit_limit_outbox_events` (eventos)
 
-- **Esquema:** lo crea Flyway desde el repo `card-management-database`: `credit_limits` en V2, `credit_limit_history` en V3 y `credit_operations` en V12. Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes del arranque.
+Transactional outbox de card-limits (V15), con la misma estructura que `outbox_events` de card-data: `event_id` (único), `aggregate_id` (el `cardId`, key del mensaje), `topic`, `event_type`, `payload` (JSON), `created_at`, `published_at`, `failed_at`, `attempts` y `last_error`.
+
+- `CreditLimitEventEmitter` traduce cada cambio a su evento y lo encola con `EventOutboxPort` en la transacción del caso de uso (`Propagation.MANDATORY`). Si la operación se rechaza o falla, el evento no existe.
+- **Asignación y cambios de límite** → `credit-limit.assigned` / `credit-limit.updated` (uno por entrada nueva de `credit_limit_history`).
+- **Consumos y liberaciones** → `credit-limit.consumed` / `credit-limit.released`, según suba o baje lo consumido. Una operación repetida con el mismo `operationId` no vuelve a publicar.
+- `CreditLimitOutboxRelay` publica los pendientes cada `poll-interval-ms`, en orden y con `FOR UPDATE SKIP LOCKED`. Un error transitorio corta el lote y se reintenta; uno permanente marca `failed_at`. `CreditLimitOutboxCleaner` borra los publicados de más de `retention-days`.
+- Contratos y tipos de operación en [EVENTS.md §4.10](EVENTS.md).
+
+### 6.6 Notas
+
+- **Esquema:** lo crea Flyway desde el repo `card-management-database`: `credit_limits` en V2, `credit_limit_history` en V3, `credit_operations` en V12 y `credit_limit_outbox_events` en V15. Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes del arranque.
 - **Restricciones de la migración que el código no refleja:**
   - `credit_limits.card_id` → FK a `cards(id)` (`ON DELETE CASCADE`).
   - `chk_consumed_not_negative`: `consumed_credit_amount`, `daily_limit_consumed` y `monthly_limit_consumed` ≥ 0.
@@ -443,6 +453,10 @@ Operaciones de crédito identificadas por el cliente (V12), una por `operationId
 | `spring.datasource.url` | `jdbc:postgresql://localhost:5432/card_management_db` |
 | `spring.datasource.username` / `password` | `card_user` / `card_pass` |
 | `spring.jpa.hibernate.ddl-auto` | `validate` |
+| `spring.kafka.bootstrap-servers` | `localhost:9092` (docker-compose: `kafka:9092`) |
+| `card.limits.outbox.poll-interval-ms` / `batch-size` | `1000` / `50` |
+| `card.limits.outbox.send-timeout-ms` | `15000` (debe superar `delivery.timeout.ms` + `max.block.ms` del productor) |
+| `card.limits.outbox.retention-days` / `cleanup-cron` | `7` / `0 0 3 * * *` |
 | `management.endpoints.web.exposure.include` | `health,info,metrics` |
 
 El perfil `card-limits` (`application-card-limits.yml`, activado por docker-compose) agrega logging a `logs/card-limits.log`, Prometheus y SpringDoc. Declara además `credit-limits.defaults.*` (límite diario, mensual y % de adelantos), `credit-limits.validation.*` y `credit-limits.audit.*`, pero **ningún código las lee**: los valores efectivos están fijos en los VO.
@@ -452,7 +466,7 @@ El perfil `card-limits` (`application-card-limits.yml`, activado por docker-comp
 ### 7.2 Docker
 
 - `services/card-limits/Dockerfile`: build multi-stage con contexto en la raíz del repo.
-- `deploy/docker/docker-compose.yml`: servicio `card-limits-service`, puerto `8082`, perfil `card-limits`, healthcheck sobre `/actuator/health`.
+- `deploy/docker/docker-compose.yml`: servicio `card-limits-service`, puerto `8082`, perfil `card-limits`, healthcheck sobre `/actuator/health`. Publica en `kafka:9092` y espera a que `kafka` esté *healthy*.
 
 ```bash
 docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
@@ -472,7 +486,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 | `card-data` | `card-limits` lee `cards.status` y `cards.deleted` | Funciona (acoplamiento por base compartida) |
 | `card-lifecycle` | Lee `credit_limits` por `card_id` para decidir si se puede activar | La regla existe pero el endpoint de activación no la usa ([LIFECYCLE.md §9](LIFECYCLE.md)); además esa consulta no filtra `deleted` |
 | `payment-processing` | Valida (`validate/*`), consume al aprobar (`consume-*`) y restaura en reversos y devoluciones (`restore-credit`) por REST, siempre con `operationId`. Cancela las operaciones cuyo pago no confirmó (`operations/{id}/cancel`) | Funciona ([PAYMENT.md §4.7 y §7](PAYMENT.md)) |
-| `card-events` | Existen los topics `credit-limit.*` y sus contratos ([EVENTS.md §4.9](EVENTS.md)) | `card-limits` no publica eventos |
+| `card-events` | Contratos `credit-limit.*` y `KafkaTopics` ([EVENTS.md §4.10](EVENTS.md)) | Se publican por el outbox (§6.5); todavía sin consumidores |
 
 ---
 
@@ -501,5 +515,4 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-limits-service
 13. **DTO ajeno:** `infrastructure/adapter/input/rest/dto/LifecycleHistoryResponse.java` es una copia del DTO de `card-lifecycle` que no se usa.
 14. **Dos endpoints de asignación** (`POST /` y `POST /cards/{cardId}`) con reglas distintas para el `cardId`.
 15. **`CreditLimitManagementService` se declara dos veces:** con `@Service` y como `@Bean` en `CreditLimitUseCaseConfig`. Lo mismo pasa con `CreditValidationService`.
-16. **Sin eventos:** no publica `credit-limit.assigned`, `credit-limit.consumed`, etc., aunque los topics existen en `card-events` ([EVENTS.md §3](EVENTS.md)).
-17. **Tests incompletos:** `CreditLimitRestoreTest` (dominio de `restoreConsumption` y `revertOperation`), `CreditLimitControllerTest` y `CreditOperationIdempotencyTest` (idempotencia, cancelación y anulación, con repositorios en memoria). No hay tests de persistencia ni del lock, aunque `pom.xml` declara Testcontainers.
+16. **Tests incompletos:** `CreditLimitRestoreTest` (dominio de `restoreConsumption` y `revertOperation`), `CreditLimitControllerTest` y `CreditOperationIdempotencyTest` (idempotencia, cancelación y anulación, con repositorios en memoria, y los eventos `consumed`/`released`), `CreditLimitChangeEventsTest` (`assigned`/`updated`), `CreditLimitOutboxRelayTest` y `CreditLimitOutboxPersistenceTest` (outbox contra PostgreSQL con Testcontainers). Faltan tests de persistencia del límite y del lock.

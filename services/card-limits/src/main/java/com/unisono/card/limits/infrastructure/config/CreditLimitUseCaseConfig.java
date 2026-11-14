@@ -3,6 +3,7 @@ package com.unisono.card.limits.infrastructure.config;
 import com.unisono.card.limits.domain.port.output.CardValidationPort;
 import com.unisono.card.limits.domain.port.output.CreditLimitRepository;
 import com.unisono.card.limits.domain.port.output.CreditOperationRepository;
+import com.unisono.card.limits.domain.service.CreditLimitEventEmitter;
 import com.unisono.card.limits.domain.service.CreditLimitManagementService;
 import com.unisono.card.limits.domain.service.CreditValidationService;
 import org.springframework.context.annotation.Bean;
@@ -25,9 +26,11 @@ public class CreditLimitUseCaseConfig {
     public CreditLimitManagementService creditLimitManagementService(
             CreditLimitRepository creditLimitRepository,
             CardValidationPort cardValidationPort,
-            CreditOperationRepository creditOperationRepository
+            CreditOperationRepository creditOperationRepository,
+            CreditLimitEventEmitter eventEmitter
     ) {
-        return new CreditLimitManagementService(creditLimitRepository, cardValidationPort, creditOperationRepository);
+        return new CreditLimitManagementService(creditLimitRepository, cardValidationPort, creditOperationRepository,
+                eventEmitter);
     }
 
     /**

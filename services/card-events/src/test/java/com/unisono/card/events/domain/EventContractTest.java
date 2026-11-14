@@ -20,6 +20,7 @@ class EventContractTest {
 
     private static final String CARD_ID = "550e8400-e29b-41d4-a716-446655440000";
     private static final LocalDateTime AT = LocalDateTime.of(2026, 11, 2, 10, 15, 30);
+    private static final String LIMIT_ID = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
     private static final String TX_ID = "6f1c2d3e-8a9b-4c5d-9e0f-1a2b3c4d5e6f";
 
     private final ObjectMapper mapper = EventSerializationConfig.objectMapper();
@@ -35,9 +36,10 @@ class EventContractTest {
                 new CardUnblockedEvent(CARD_ID, "BLOCKED", AT, "Recuperada", "admin"),
                 new CardCancelledEvent(CARD_ID, "ACTIVE", AT, "Baja", "cliente"),
                 new CardExpiredEvent(CARD_ID, "ACTIVE", AT, "Vencimiento del plástico", "system"),
-                new CreditLimitAssignedEvent(CARD_ID, new BigDecimal("150000.50"), new BigDecimal("30000.10"), "ARS", "admin"),
-                new CreditLimitUpdatedEvent(CARD_ID, new BigDecimal("100.00"), new BigDecimal("200.00"), "ARS", "Aumento", "admin"),
-                new CreditLimitConsumedEvent(CARD_ID, "tx-1", new BigDecimal("10.25"), new BigDecimal("89.75"), "ARS"),
+                new CreditLimitAssignedEvent(CARD_ID, LIMIT_ID, new BigDecimal("150000.50"), new BigDecimal("45000.15"), new BigDecimal("100000.00"), new BigDecimal("500000.00"), "ARS", "admin"),
+                new CreditLimitUpdatedEvent(CARD_ID, LIMIT_ID, "PURCHASE", new BigDecimal("100.00"), new BigDecimal("200.00"), "ARS", "Aumento", "admin"),
+                new CreditLimitConsumedEvent(CARD_ID, LIMIT_ID, "op-1", "PURCHASE", new BigDecimal("10.25"), new BigDecimal("10.25"), new BigDecimal("89.75"), "ARS"),
+                new CreditLimitReleasedEvent(CARD_ID, LIMIT_ID, "op-2", "REFUND", new BigDecimal("10.25"), new BigDecimal("0.00"), new BigDecimal("100.00"), "ARS"),
                 new PaymentInitiatedEvent("evt-1", AT, TX_ID, CARD_ID, "PURCHASE", new BigDecimal("98000.00"), "ARS", new BigDecimal("100.00"), "USD", new BigDecimal("980.00"), AT),
                 new PaymentAuthorizedEvent("evt-2", AT, TX_ID, CARD_ID, "A1B2C3", 12, AT),
                 new PaymentProcessedEvent("evt-3", AT, TX_ID, CARD_ID, "APPROVED", new BigDecimal("98000.00"), "ARS", new BigDecimal("100.00"), "USD", new BigDecimal("980.00"), AT),

@@ -130,11 +130,16 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/card_management_db
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
+      # Dentro de Docker, localhost es el propio contenedor: el outbox publica en el broker de la red
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SERVER_PORT: 8082
     ports:
       - "8082:8082"
     networks:
       - card-network
+    depends_on:
+      kafka:
+        condition: service_healthy
 
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8082/actuator/health || exit 1"]

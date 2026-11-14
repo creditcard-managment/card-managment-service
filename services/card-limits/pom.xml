@@ -28,6 +28,18 @@
             <artifactId>card-shared</artifactId>
         </dependency>
 
+        <!-- card-events (contratos credit-limit.*, topics, serialización) -->
+        <dependency>
+            <groupId>com.unisono.card</groupId>
+            <artifactId>card-events</artifactId>
+        </dependency>
+
+        <!-- Kafka: el relay del outbox publica los eventos credit-limit.* -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
         <!-- ========== SPRING BOOT ========== -->
 
         <dependency>

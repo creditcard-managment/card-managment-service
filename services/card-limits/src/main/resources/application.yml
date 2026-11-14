@@ -23,6 +23,20 @@ spring:
   flyway:
     enabled: false
 
+  # Kafka: solo el productor del outbox (KafkaProducerConfig); card-limits no consume
+  kafka:
+    bootstrap-servers: localhost:9092
+
+# Outbox de eventos credit-limit.* (CreditLimitOutboxRelay / CreditLimitOutboxCleaner)
+card:
+  limits:
+    outbox:
+      poll-interval-ms: 1000     # Frecuencia de lectura de eventos pendientes
+      batch-size: 50             # Eventos por pasada
+      send-timeout-ms: 15000     # Espera por evento; debe superar delivery.timeout.ms + max.block.ms del productor
+      retention-days: 7          # Días que se conservan los eventos publicados
+      cleanup-cron: "0 0 3 * * *" # Limpieza diaria (los eventos fallidos no se borran)
+
 server:
   port: 8082  # ✅ Puerto diferente
 

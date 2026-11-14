@@ -15,6 +15,11 @@ import com.unisono.card.limits.domain.port.output.CreditOperationRepository;
 import com.unisono.card.shared.domain.exception.BusinessRuleException;
 import com.unisono.card.shared.domain.valueobject.CardId;
 import com.unisono.card.shared.domain.valueobject.Money;
+import com.unisono.card.events.config.KafkaTopics;
+import com.unisono.card.events.domain.CreditLimitConsumedEvent;
+import com.unisono.card.events.domain.CreditLimitReleasedEvent;
+import com.unisono.card.events.domain.DomainEvent;
+import com.unisono.card.limits.domain.port.input.RecalculateAvailableCreditUseCase.ReleaseCreditCommand;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -29,7 +34,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 /**
- * Operaciones de crédito con operationId: idempotencia, cancelación exacta y anulación antes de llegar
+ * Operaciones de crédito con operationId: idempotencia, cancelación exacta y anulación antes de llegar,
+ * y los eventos credit-limit.consumed / credit-limit.released que publica cada una
  */
 class CreditOperationIdempotencyTest {
 
@@ -37,12 +43,15 @@ class CreditOperationIdempotencyTest {
 
     private final InMemoryCreditLimits creditLimits = new InMemoryCreditLimits();
     private final InMemoryOperations operations = new InMemoryOperations();
+    /** Eventos encolados en el outbox (topic → evento) */
+    private final List<Map.Entry<String, DomainEvent>> outbox = new java.util.ArrayList<>();
     private CreditLimitManagementService service;
     private CreditLimit creditLimit;
 
     @BeforeEach
     void setUp() {
-        service = new CreditLimitManagementService(creditLimits, mock(CardValidationPort.class), operations);
+        service = new CreditLimitManagementService(creditLimits, mock(CardValidationPort.class), operations,
+                new CreditLimitEventEmitter((topic, key, event) -> outbox.add(Map.entry(topic, event))));
         creditLimit = creditLimits.save(CreditLimit.assign(CARD_ID, Money.ofARS(500_000), 0.3, "test"));
     }
 
@@ -171,6 +180,92 @@ class CreditOperationIdempotencyTest {
     /**
      * Guarda las mismas instancias: lo que el servicio modifica se ve en el test
      */
+    // ========== Eventos ==========
+
+    @Test
+    void consumptionPublishesConsumedOnceEvenIfReplayed() {
+        service.consumeForPurchase(consume("op-1", 20_000));
+        service.consumeForPurchase(consume("op-1", 20_000));
+
+        assertThat(outbox).extracting(Map.Entry::getKey).containsExactly(KafkaTopics.CREDIT_LIMIT_CONSUMED);
+        CreditLimitConsumedEvent consumed = (CreditLimitConsumedEvent) outbox.get(0).getValue();
+        assertThat(consumed.getCardId()).isEqualTo(CARD_ID.getValue());
+        assertThat(consumed.getCreditLimitId()).isEqualTo(creditLimit.getId());
+        assertThat(consumed.getOperationId()).isEqualTo("op-1");
+        assertThat(consumed.getOperationType()).isEqualTo("PURCHASE");
+        assertThat(consumed.getAmount()).isEqualByComparingTo("20000");
+        assertThat(consumed.getConsumedAmount()).isEqualByComparingTo("20000");
+        assertThat(consumed.getAvailableAmount()).isEqualByComparingTo("480000");
+        assertThat(consumed.getCurrency()).isEqualTo("ARS");
+    }
+
+    @Test
+    void cashAdvanceIsPublishedWithItsType() {
+        service.consumeForCashAdvance(new ConsumeCreditCommand(creditLimit.getId(), Money.ofARS(10_000), "adelanto",
+                "op-ca"));
+
+        assertThat(((CreditLimitConsumedEvent) outbox.get(0).getValue()).getOperationType()).isEqualTo("CASH_ADVANCE");
+    }
+
+    @Test
+    void cancellingAConsumptionPublishesReleasedOnlyOnce() {
+        service.consumeForPurchase(consume("op-1", 20_000));
+        outbox.clear();
+
+        service.cancelOperation(new CancelOperationCommand(creditLimit.getId(), "op-1"));
+        service.cancelOperation(new CancelOperationCommand(creditLimit.getId(), "op-1"));
+        service.cancelOperation(new CancelOperationCommand(creditLimit.getId(), "op-never-arrived"));
+
+        assertThat(outbox).extracting(Map.Entry::getKey).containsExactly(KafkaTopics.CREDIT_LIMIT_RELEASED);
+        CreditLimitReleasedEvent released = (CreditLimitReleasedEvent) outbox.get(0).getValue();
+        assertThat(released.getOperationType()).isEqualTo("CONSUMPTION_CANCELLED");
+        assertThat(released.getOperationId()).isEqualTo("op-1");
+        assertThat(released.getAmount()).isEqualByComparingTo("20000");
+        assertThat(released.getConsumedAmount()).isEqualByComparingTo("0");
+        assertThat(released.getAvailableAmount()).isEqualByComparingTo("500000");
+    }
+
+    @Test
+    void paymentAndRefundPublishReleasedAndUndoingTheRefundPublishesConsumed() {
+        service.consumeForPurchase(consume("op-1", 30_000));
+        service.releaseCredit(new ReleaseCreditCommand(creditLimit.getId(), Money.ofARS(10_000), "pago del resumen"));
+        service.restoreCredit(new RestoreCreditCommand(creditLimit.getId(), Money.ofARS(5_000), LocalDate.now(),
+                "devolución", "op-2"));
+        service.cancelOperation(new CancelOperationCommand(creditLimit.getId(), "op-2"));
+
+        assertThat(outbox).extracting(Map.Entry::getKey).containsExactly(KafkaTopics.CREDIT_LIMIT_CONSUMED,
+                KafkaTopics.CREDIT_LIMIT_RELEASED, KafkaTopics.CREDIT_LIMIT_RELEASED, KafkaTopics.CREDIT_LIMIT_CONSUMED);
+
+        CreditLimitReleasedEvent payment = (CreditLimitReleasedEvent) outbox.get(1).getValue();
+        assertThat(payment.getOperationType()).isEqualTo("PAYMENT");
+        assertThat(payment.getOperationId()).isNull();
+        assertThat(payment.getAmount()).isEqualByComparingTo("10000");
+        assertThat(payment.getConsumedAmount()).isEqualByComparingTo("20000");
+
+        CreditLimitReleasedEvent refund = (CreditLimitReleasedEvent) outbox.get(2).getValue();
+        assertThat(refund.getOperationType()).isEqualTo("REFUND");
+        assertThat(refund.getOperationId()).isEqualTo("op-2");
+        assertThat(refund.getAmount()).isEqualByComparingTo("5000");
+
+        CreditLimitConsumedEvent undoneRefund = (CreditLimitConsumedEvent) outbox.get(3).getValue();
+        assertThat(undoneRefund.getOperationType()).isEqualTo("REFUND_CANCELLED");
+        assertThat(undoneRefund.getAmount()).isEqualByComparingTo("5000");
+        assertThat(undoneRefund.getConsumedAmount()).isEqualByComparingTo("20000");
+    }
+
+    @Test
+    void refundOfSomethingAlreadyPaidPublishesNothing() {
+        service.consumeForPurchase(consume("op-1", 20_000));
+        service.releaseCredit(new ReleaseCreditCommand(creditLimit.getId(), Money.ofARS(20_000), "pago del resumen"));
+        outbox.clear();
+
+        // Lo consumido ya es cero: la devolución no baja nada (no hay saldo a favor)
+        service.restoreCredit(new RestoreCreditCommand(creditLimit.getId(), Money.ofARS(20_000), LocalDate.now(),
+                "devolución", "op-2"));
+
+        assertThat(outbox).isEmpty();
+    }
+
     private static class InMemoryCreditLimits implements CreditLimitRepository {
         private final Map<String, CreditLimit> store = new HashMap<>();
 
