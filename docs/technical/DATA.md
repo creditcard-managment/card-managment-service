@@ -353,6 +353,7 @@ Ninguna respuesta expone el PAN completo, el CVV ni el hash del PIN.
 | `InvalidValueObjectException` | 400 | `Validation Error` |
 | `HttpMessageNotReadableException` (JSON mal formado, enum inexistente, fecha inválida) | 400 | `Validation Error` |
 | `BusinessRuleException` | 422 | `Business Rule Violation` |
+| `OptimisticLockingFailureException` (otra operación cambió la tarjeta, §6.4) | 409 | `Conflict` |
 | Cualquier otra | 500 | `Internal Server Error` |
 
 ---
@@ -460,10 +461,11 @@ sequenceDiagram
 | `block_reason` / `cancelled_reason` | `varchar(500)` | sí | |
 | `deleted` | `boolean` | no | default `false` |
 | `deleted_at` | `timestamp` | sí | |
+| `version` | `bigint` | no | default `0`, `@Version` (V13, §6.4) |
 
 Los datos del titular se guardan en la misma tabla (no hay tabla de titulares).
 
-> **Esquema**: lo crea Flyway desde el repo `card-management-database`: `cards` en V1, ajustada por V8 (`INFINITE`, longitudes) y V9 (`pin_failed_attempts`), y `outbox_events` en V9, ajustada por V10 (`failed_at`). Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes de levantar el servicio.
+> **Esquema**: lo crea Flyway desde el repo `card-management-database`: `cards` en V1, ajustada por V8 (`INFINITE`, longitudes) V9 (`pin_failed_attempts`) y V13 (`version`), y `outbox_events` en V9, ajustada por V10 (`failed_at`). Este módulo usa `ddl-auto: validate` con Flyway deshabilitado, así que las tablas deben existir antes de levantar el servicio.
 
 #### 6.1.1 Diferencias entre el esquema y `CardEntity`
 
@@ -501,7 +503,16 @@ Un evento está **pendiente** si `published_at` y `failed_at` son nulos; el índ
 
 Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) filtran `deleted = false`. `CardRepository.delete(...)` marca `deleted = true` y `deleted_at`; no hay borrado físico.
 
-### 6.4 Consultas disponibles
+### 6.4 Concurrencia (`@Version`)
+
+`CardEntity.version` es la versión de la fila. Cada `UPDATE` exige la versión que se leyó y la incrementa, así que dos operaciones sobre la misma tarjeta no se pisan.
+
+- **Conflicto:** si otra transacción cambió la tarjeta entre la lectura y el guardado (por ejemplo, un `PUT /status` que leyó la tarjeta mientras el job de vencimiento la vencía), el guardado falla con `ObjectOptimisticLockingFailureException`. La transacción se revierte entera, sin eventos en el outbox, y la API responde **409**. El cliente puede volver a leer la tarjeta y reintentar.
+- **Flujo:** `Card.version` viaja del entity al dominio y de vuelta (`CardEntityMapper`). Una tarjeta nueva tiene versión nula (INSERT, arranca en `0`).
+- **Guardado:** `CardRepositoryAdapter.save` usa `saveAndFlush`: el chequeo se hace en el momento, antes de encolar el evento, y la versión nueva vuelve a la instancia (`Card.syncVersion`). Por eso la misma instancia se puede guardar dos veces en una operación, como el intento fallido de PIN que además bloquea.
+- **Job de vencimiento:** toma las tarjetas con `FOR UPDATE`, así que nunca entra en conflicto. El que falla es el request que las había leído antes.
+
+### 6.5 Consultas disponibles
 
 | Método | Uso |
 |---|---|
@@ -639,8 +650,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d card-data-service
 
 Comportamientos actuales del código que conviene tener presentes:
 
-1. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay; de persistencia, solo el del vencimiento contra PostgreSQL (`CardExpirationPersistenceTest`, Testcontainers). `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
+1. **Tests incompletos.** Hay tests de dominio, servicios, endpoints (MockMvc) y del relay; de persistencia, solo los del vencimiento y la concurrencia contra PostgreSQL (`CardExpirationPersistenceTest`, `CardOptimisticLockingPersistenceTest`, Testcontainers). `CardTest` y `CardManagementServiceTest` tienen todos sus tests comentados.
 2. `services/card-data/README.md` contiene la documentación de `card-shared`, no la de este módulo.
 3. **PIN en claro en tránsito fuera de los adelantos.** La emisión (`PUT /card-data`), el cambio de PIN (`reset-pin`) y la activación desde card-lifecycle (`validate-pin` con `pin`) siguen recibiendo el PIN en claro. Solo los adelantos (payment-processing) usan PIN block.
-4. **Sin control de concurrencia optimista en `cards`.** Las escrituras no usan `@Version`: si un `PUT /status` (o un bloqueo) lee la tarjeta mientras el job de vencimiento la vence, puede pisar el `EXPIRED`. La tarjeta queda en el estado del request y la ejecución del día siguiente la vuelve a vencer (se publican los dos eventos).
 

@@ -23,6 +23,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -92,6 +94,17 @@ class CardStatusEndpointsTest {
                 .andExpect(jsonPath("$.error").value("Business Rule Violation"));
 
         assertThat(storedCard().getStatus()).isEqualTo(CardStatus.REQUESTED);
+    }
+
+    @Test
+    void shouldReturn409AndPublishNothingWhenTheCardChangedConcurrently() throws Exception {
+        repository.concurrentChange = true;
+
+        putJson("/status", "{\"status\":\"APPROVED\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("Conflict"));
+
+        assertThat(outbox).isEmpty();
     }
 
     @Test
@@ -385,8 +398,14 @@ class CardStatusEndpointsTest {
 
         private final Map<String, Card> cards = new HashMap<>();
 
+        /** Simula que otra operación cambió la tarjeta entre la lectura y el guardado. */
+        private boolean concurrentChange;
+
         @Override
         public Card save(Card card) {
+            if (concurrentChange) {
+                throw new ObjectOptimisticLockingFailureException("CardEntity", card.getId().getValue());
+            }
             cards.put(card.getId().getValue(), card);
             return card;
         }

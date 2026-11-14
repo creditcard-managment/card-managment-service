@@ -5,6 +5,7 @@ import com.unisono.card.shared.domain.exception.InvalidValueObjectException;
 import com.unisono.card.shared.domain.exception.NotFoundException;
 import com.unisono.card.shared.domain.exception.ValidationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -73,6 +74,24 @@ public class GlobalExceptionHandler {
                 .build();
 
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(error);
+    }
+
+    /**
+     * Otra operación cambió la tarjeta mientras se procesaba este request (versión distinta en cards).
+     * No se guardó nada; el cliente puede volver a leerla y reintentar.
+     */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLock(OptimisticLockingFailureException ex) {
+        log.warn("Concurrent modification: {}", ex.getMessage());
+
+        ErrorResponse error = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.CONFLICT.value())
+                .error("Conflict")
+                .message("La tarjeta fue modificada por otra operación. Volvé a consultarla y reintentá.")
+                .build();
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     /**

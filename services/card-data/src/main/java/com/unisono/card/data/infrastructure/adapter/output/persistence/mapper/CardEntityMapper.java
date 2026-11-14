@@ -85,6 +85,9 @@ public class CardEntityMapper {
         entity.setDeleted(card.getDeleted());
         entity.setDeletedAt(card.getDeletedAt());
 
+        // Versión leída: Hibernate la compara al actualizar (nula en una tarjeta nueva → INSERT)
+        entity.setVersion(card.getVersion());
+
         return entity;
     }
 
@@ -150,7 +153,8 @@ public class CardEntityMapper {
                 entity.getBlockReason(),
                 entity.getCancelledReason(),
                 entity.getDeleted(),
-                entity.getDeletedAt()
+                entity.getDeletedAt(),
+                entity.getVersion()
         );
     }
 }
