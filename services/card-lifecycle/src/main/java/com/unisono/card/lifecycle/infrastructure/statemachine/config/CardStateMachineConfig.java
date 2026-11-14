@@ -136,6 +136,13 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .event(CardLifecycleEvent.CANCEL)
                 .and()
 
+                // ISSUED → EXPIRED (vence aunque nunca se haya activado)
+                .withExternal()
+                .source(CardLifecycleState.ISSUED)
+                .target(CardLifecycleState.EXPIRED)
+                .event(CardLifecycleEvent.EXPIRE)
+                .and()
+
                 // ========================================
                 // Desde ACTIVE
                 // ========================================
@@ -188,6 +195,13 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .event(CardLifecycleEvent.CANCEL)
                 .and()
 
+                // BLOCKED → EXPIRED (vence aunque esté bloqueada)
+                .withExternal()
+                .source(CardLifecycleState.BLOCKED)
+                .target(CardLifecycleState.EXPIRED)
+                .event(CardLifecycleEvent.EXPIRE)
+                .and()
+
                 // ========================================
                 // Desde BLOCKED_FRAUD
                 // ========================================
@@ -203,6 +217,13 @@ public class CardStateMachineConfig extends EnumStateMachineConfigurerAdapter<Ca
                 .withExternal()
                 .source(CardLifecycleState.BLOCKED_FRAUD)
                 .target(CardLifecycleState.CANCELLED)
-                .event(CardLifecycleEvent.CANCEL);
+                .event(CardLifecycleEvent.CANCEL)
+                .and()
+
+                // BLOCKED_FRAUD → EXPIRED (vence aunque esté bloqueada)
+                .withExternal()
+                .source(CardLifecycleState.BLOCKED_FRAUD)
+                .target(CardLifecycleState.EXPIRED)
+                .event(CardLifecycleEvent.EXPIRE);
     }
 }

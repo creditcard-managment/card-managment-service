@@ -16,10 +16,10 @@ class CardStatusTest {
     private static final Map<CardStatus, Set<CardStatus>> ALLOWED = Map.of(
             REQUESTED, EnumSet.of(APPROVED, REJECTED),
             APPROVED, EnumSet.of(ISSUED, CANCELLED),
-            ISSUED, EnumSet.of(ACTIVE, BLOCKED, BLOCKED_FRAUD, CANCELLED),
+            ISSUED, EnumSet.of(ACTIVE, BLOCKED, BLOCKED_FRAUD, EXPIRED, CANCELLED),
             ACTIVE, EnumSet.of(BLOCKED, BLOCKED_FRAUD, EXPIRED, CANCELLED),
-            BLOCKED, EnumSet.of(ACTIVE, CANCELLED),
-            BLOCKED_FRAUD, EnumSet.of(ACTIVE, CANCELLED),
+            BLOCKED, EnumSet.of(ACTIVE, EXPIRED, CANCELLED),
+            BLOCKED_FRAUD, EnumSet.of(ACTIVE, EXPIRED, CANCELLED),
             REJECTED, EnumSet.noneOf(CardStatus.class),
             CANCELLED, EnumSet.noneOf(CardStatus.class),
             EXPIRED, EnumSet.noneOf(CardStatus.class)

@@ -7,11 +7,14 @@ import com.unisono.card.data.infrastructure.adapter.output.persistence.entity.Ca
 import com.unisono.card.data.infrastructure.adapter.output.persistence.mapper.CardEntityMapper;
 import com.unisono.card.data.infrastructure.adapter.output.persistence.repository.JpaCardRepository;
 import com.unisono.card.shared.domain.valueobject.CardId;
+import com.unisono.card.shared.domain.valueobject.CardStatus;
 import com.unisono.card.shared.domain.valueobject.ClientId;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.YearMonth;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -25,6 +28,12 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 public class CardRepositoryAdapter implements CardRepository {
+
+    /** Estados desde los que una tarjeta puede vencer (las reglas viven en CardStatus). */
+    private static final List<String> EXPIRABLE_STATUSES = Arrays.stream(CardStatus.values())
+            .filter(status -> status.canTransitionTo(CardStatus.EXPIRED))
+            .map(Enum::name)
+            .toList();
 
     private final JpaCardRepository jpaRepository;
     private final CardEntityMapper mapper;
@@ -92,6 +101,14 @@ public class CardRepositoryAdapter implements CardRepository {
 
         return jpaRepository.findByCardNumberEncrypted(encryptedCardNumber)
                 .map(this::entityToDomain);
+    }
+
+    @Override
+    public List<Card> lockExpiredBatch(YearMonth currentMonth, int limit) {
+        int monthIndex = currentMonth.getYear() * 12 + currentMonth.getMonthValue();
+        return jpaRepository.lockExpiredBatch(EXPIRABLE_STATUSES, monthIndex, limit).stream()
+                .map(this::entityToDomain)
+                .toList();
     }
 
     @Override

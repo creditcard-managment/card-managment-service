@@ -69,7 +69,7 @@ Estado según el código actual de los servicios:
 | `CARD_BLOCKED` | `card.blocked` | `CardBlockedEvent` | card-data | — | ✅ Se publica |
 | `CARD_UNBLOCKED` | `card.unblocked` | `CardUnblockedEvent` | card-data | — | ✅ Se publica |
 | `CARD_CANCELLED` | `card.cancelled` | `CardCancelledEvent` | card-data | — | ✅ Se publica |
-| `CARD_EXPIRED` | `card.expired` | `CardExpiredEvent` | card-data | — | ✅ Se publica (nada vence tarjetas todavía, ver §10) |
+| `CARD_EXPIRED` | `card.expired` | `CardExpiredEvent` | card-data | — | ✅ Se publica (job diario de vencimiento o `PUT /status`) |
 | `CREDIT_LIMIT_ASSIGNED` | `credit-limit.assigned` | `CreditLimitAssignedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_UPDATED` | `credit-limit.updated` | `CreditLimitUpdatedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_CONSUMED` | `credit-limit.consumed` | `CreditLimitConsumedEvent` | — | — | Contrato definido, sin uso |
@@ -196,7 +196,7 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | `reason` | `String` |
 | `expiredBy` | `String` |
 
-`EXPIRED` es un estado final. Hoy solo se llega con `PUT /status`: ningún proceso vence tarjetas solo (ver §10).
+`EXPIRED` es un estado final. Se llega desde `ISSUED`, `ACTIVE`, `BLOCKED` o `BLOCKED_FRAUD`: con el job diario de vencimiento de card-data (`reason` = `Vencimiento por fecha (MM/YY)`, `expiredBy` = `system`) o con `PUT /status`. Ver [DATA.md §5.5](DATA.md).
 
 ### 4.10 Eventos de límite de crédito (sin uso)
 
@@ -256,6 +256,7 @@ sequenceDiagram
 | `POST /unblock` | `card.unblocked` |
 | `POST /cancel`, `PUT /status` → `CANCELLED` | `card.cancelled` |
 | `PUT /status` → `EXPIRED` | `card.expired` (registra `expiredAt`) |
+| Job diario de vencimiento (`CardExpirationScheduler`) | `card.expired`, autor `system` |
 
 ### 5.2 Configuración del productor (card-data)
 
@@ -439,7 +440,6 @@ docker exec -it card-management-kafka kafka-console-consumer \
 ## 10. Limitaciones conocidas y deuda técnica
 
 1. **Eventos de tarjeta sin consumidores.** `card.created` es el único que se consume; los demás se publican, pero todavía nadie los lee. Tampoco se crea historial en `state_transitions` para los cambios que no pasan por card-lifecycle, como el bloqueo automático por PIN.
-2. **Nada vence tarjetas.** `card.expired` existe y se publica cuando una tarjeta pasa a `EXPIRED`, pero solo se llega ahí con `PUT /status`: no hay un proceso que venza las tarjetas al llegar su fecha (`Card.expire()` no se usa y el evento `EXPIRE` de la state machine de card-lifecycle no tiene un caso de uso).
-3. **Reproceso de la DLQ acotado** (ver §5.3): `DeadLetterRedriver` reinyecta los mensajes durante unos 31 min; si la causa dura más (o el mensaje es ilegible), quedan en la DLQ y hay que reinyectarlos a mano. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
-4. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
-5. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.
+2. **Reproceso de la DLQ acotado** (ver §5.3): `DeadLetterRedriver` reinyecta los mensajes durante unos 31 min; si la causa dura más (o el mensaje es ilegible), quedan en la DLQ y hay que reinyectarlos a mano. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
+3. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
+4. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.

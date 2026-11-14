@@ -55,6 +55,22 @@ public interface JpaCardRepository extends JpaRepository<CardEntity, String> {
     List<CardEntity> findCardsRequiringRenewal();
 
     /**
+     * Toma y bloquea un lote de tarjetas vencidas por fecha que todavía no están en EXPIRED.
+     *
+     * Vencida: su mes de vencimiento es anterior al mes en curso (monthIndex = año × 12 + mes), porque una
+     * tarjeta 11/2026 es válida hasta el último día de noviembre. FOR UPDATE SKIP LOCKED permite varias
+     * instancias del job sin vencer dos veces la misma tarjeta. Debe ejecutarse dentro de una transacción.
+     */
+    @Query(value = "SELECT * FROM cards WHERE deleted = false AND status IN (:statuses) " +
+            "AND expiration_year IS NOT NULL AND expiration_month IS NOT NULL " +
+            "AND (expiration_year * 12 + expiration_month) < :monthIndex " +
+            "ORDER BY id LIMIT :limit FOR UPDATE SKIP LOCKED",
+            nativeQuery = true)
+    List<CardEntity> lockExpiredBatch(@Param("statuses") List<String> statuses,
+                                      @Param("monthIndex") int monthIndex,
+                                      @Param("limit") int limit);
+
+    /**
      * Override findById para excluir eliminadas
      */
     @Query("SELECT c FROM CardEntity c WHERE c.id = :id AND c.deleted = false")

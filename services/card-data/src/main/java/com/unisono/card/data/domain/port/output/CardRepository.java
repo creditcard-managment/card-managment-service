@@ -4,6 +4,7 @@ import com.unisono.card.data.domain.model.Card;
 import com.unisono.card.shared.domain.valueobject.CardId;
 import com.unisono.card.shared.domain.valueobject.ClientId;
 
+import java.time.YearMonth;
 import java.util.List;
 import java.util.Optional;
 
@@ -39,6 +40,13 @@ public interface CardRepository {
      * Busca una tarjeta por el número completo (encriptado en BD)
      */
     Optional<Card> findByCardNumber(String encryptedCardNumber);
+
+    /**
+     * Toma y bloquea hasta {@code limit} tarjetas con fecha de vencimiento anterior a {@code currentMonth}
+     * que todavía pueden pasar a EXPIRED. Las que bloquea otra transacción se saltean.
+     * Debe ejecutarse dentro de una transacción.
+     */
+    List<Card> lockExpiredBatch(YearMonth currentMonth, int limit);
 
     /**
      * Elimina una tarjeta (soft delete recomendado)

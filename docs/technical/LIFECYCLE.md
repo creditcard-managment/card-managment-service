@@ -142,18 +142,23 @@ stateDiagram-v2
     APPROVED --> CANCELLED: CANCEL
     ISSUED --> ACTIVE: ACTIVATE [ActivationGuard]
     ISSUED --> CANCELLED: CANCEL
+    ISSUED --> EXPIRED: EXPIRE
     ACTIVE --> BLOCKED: BLOCK [BlockGuard]
     ACTIVE --> BLOCKED_FRAUD: BLOCK_FRAUD [BlockGuard]
     ACTIVE --> EXPIRED: EXPIRE
     ACTIVE --> CANCELLED: CANCEL
     BLOCKED --> ACTIVE: UNBLOCK
     BLOCKED --> CANCELLED: CANCEL
+    BLOCKED --> EXPIRED: EXPIRE
     BLOCKED_FRAUD --> ACTIVE: UNBLOCK
     BLOCKED_FRAUD --> CANCELLED: CANCEL
+    BLOCKED_FRAUD --> EXPIRED: EXPIRE
     REJECTED --> [*]
     CANCELLED --> [*]
     EXPIRED --> [*]
 ```
+
+`EXPIRE` no tiene caso de uso en card-lifecycle: las tarjetas las vence el job diario de card-data ([DATA.md §5.5](DATA.md)), que no pasa por este servicio ni deja fila en `state_transitions`. La state machine acepta `EXPIRE` desde los mismos estados que `CardStatus`.
 
 **Guards**:
 
