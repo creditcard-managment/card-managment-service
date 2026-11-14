@@ -21,6 +21,7 @@ import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
+import org.springframework.util.backoff.FixedBackOff;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -118,6 +119,30 @@ public class KafkaConsumerConfig {
         factory.setConcurrency(1);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
         factory.setCommonErrorHandler(kafkaErrorHandler);
+
+        return factory;
+    }
+
+    /**
+     * Contenedor del reprocesador de la DLQ (DeadLetterRedriver). No tiene DLQ propia: si no puede volver a
+     * publicar un mensaje, lo reintenta sin límite cada {@code dlq-redrive.retry-interval-ms}, sin confirmarlo.
+     */
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, Object> dlqRedriveContainerFactory(
+            ConsumerFactory<String, Object> consumerFactory,
+            @Value("${card-lifecycle.kafka.dlq-redrive.retry-interval-ms:5000}") long retryIntervalMs) {
+
+        ConcurrentKafkaListenerContainerFactory<String, Object> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+
+        factory.setConsumerFactory(consumerFactory);
+        factory.setConcurrency(1);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
+        factory.setCommonErrorHandler(new DefaultErrorHandler(
+                new FixedBackOff(retryIntervalMs, FixedBackOff.UNLIMITED_ATTEMPTS)));
+        // La partición que espera un mensaje (nack) se reanuda al terminar un poll: un timeout corto
+        // hace que el reproceso salga a horario, con un segundo de diferencia como mucho
+        factory.getContainerProperties().setPollTimeout(1000);
 
         return factory;
     }

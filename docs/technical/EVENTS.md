@@ -285,6 +285,7 @@ sequenceDiagram
 | Error handler | `DefaultErrorHandler` con espera exponencial y `DeadLetterPublishingRecoverer` |
 | Reintentos | `card-lifecycle.kafka.retry.max-retries` (4) y `initial-interval-ms` (1000): 1 s, 2 s, 4 s y 8 s |
 | DLQ | `dlq.card-events`, con productor propio (`acks=all`, idempotente) |
+| Reproceso de la DLQ | `DeadLetterRedriver`, grupo `card-lifecycle-consumer-group-dlq-redrive` (ver abajo) |
 
 > `KafkaConsumerConfig` define su propio `ConsumerFactory`: del `application.yml` solo lee `spring.kafka.bootstrap-servers` y `spring.kafka.consumer.group-id`. Por eso el yml no declara deserializers ni propiedades `spring.json.*`.
 
@@ -304,7 +305,7 @@ flowchart LR
 - La partición queda detenida mientras se reintenta, para conservar el orden por tarjeta. Agotados los reintentos, el resto de los mensajes se procesa con normalidad.
 - Si la publicación en la DLQ falla, el mensaje no se confirma y se vuelve a procesar: no se pierde.
 - El mensaje llega a la DLQ con su key y su valor originales. Los headers `kafka_dlt-*` indican el topic, la partición y el offset de origen, y la excepción.
-- Si un corte de la base dura más que los reintentos (15 s en total), los mensajes afectados también van a la DLQ y hay que reprocesarlos.
+- Si un corte de la base dura más que los reintentos (15 s en total), los mensajes afectados también van a la DLQ, y `DeadLetterRedriver` los reprocesa solo.
 
 **Inspeccionar la DLQ:**
 
@@ -314,7 +315,36 @@ docker exec -it card-management-kafka kafka-console-consumer \
   --property print.key=true --property print.headers=true
 ```
 
-**Reprocesar:** todavía no hay herramienta. Una vez corregida la causa, hay que volver a publicar el valor en `card.created` con la misma key; el consumidor es idempotente. La DLQ tiene la retención del broker (7 días, §7).
+**Reproceso automático (`DeadLetterRedriver`):** un consumidor propio lee `dlq.card-events` y vuelve a publicar cada mensaje en su topic de origen (header `kafka_dlt-original-topic`), con la misma key y el mismo valor. El consumidor de `card.created` es idempotente, así que reinyectar un mensaje ya procesado no tiene efecto.
+
+```mermaid
+flowchart LR
+    D[(dlq.card-events)] --> R[DeadLetterRedriver]
+    R -->|JSON ilegible, topic desconocido<br/>o intentos agotados| P[Queda en la DLQ<br/>para revisión manual]
+    R -->|Todavía no se cumplió la espera| W[Pausa la partición<br/>y lo vuelve a leer]
+    W --> R
+    R -->|Se cumplió la espera| T[(card.created)<br/>x-dlq-redrive-count + 1]
+    T --> L[CardEventConsumer]
+    L -->|Vuelve a fallar| D
+```
+
+- **Espera:** se cuenta desde que el mensaje entró a la DLQ: `initial-delay-ms × multiplier^intentos`, es decir, 1, 2, 4, 8 y 16 min con los valores por defecto (unos 31 min en total). Mientras tanto la partición de la DLQ queda pausada (`nack`) y los mensajes que vienen detrás esperan su turno.
+- **Intentos:** el número de reproceso viaja en el header `x-dlq-redrive-count`. Si el mensaje vuelve a fallar, `DeadLetterPublishingRecoverer` copia los headers y lo devuelve a la DLQ con el contador. Al reinyectarlo se sacan los headers `kafka_dlt-*` del paso anterior.
+- **No se reprocesan:** los mensajes ilegibles (el error es un `JsonProcessingException`, nunca van a funcionar), los de un topic que card-lifecycle no consume y los que agotaron `max-attempts`. Se confirman y quedan en la DLQ, con un log `ERROR` y la métrica correspondiente.
+- **Si no puede publicar**, no confirma el mensaje y lo reintenta cada `retry-interval-ms`, sin límite: el contenedor no tiene DLQ propia.
+- **Orden:** un mensaje reprocesado llega a `card.created` después de los que se publicaron mientras tanto. Hoy no importa, porque el único consumidor registra la transición inicial de forma idempotente.
+
+| Propiedad (`card-lifecycle.kafka.dlq-redrive.*`) | Default |
+|---|---|
+| `enabled` | `true` (arranque del listener) |
+| `max-attempts` | `5` |
+| `initial-delay-ms` / `multiplier` | `60000` / `2` |
+| `send-timeout-ms` | `10000` |
+| `retry-interval-ms` | `5000` |
+
+Métrica `card.lifecycle.dlq.redrive{outcome}`: `redriven`, `parked_unreadable`, `parked_exhausted` y `parked_unknown_topic`. Un `parked_*` que sube requiere revisión.
+
+**Reprocesar a mano** un mensaje que quedó en la DLQ: una vez corregida la causa, volver a publicar el valor en `card.created` con la misma key. Sin el header `x-dlq-redrive-count`, si vuelve a fallar arranca de nuevo con los reprocesos automáticos. La DLQ tiene la retención del broker (7 días, §7).
 
 ---
 
@@ -410,6 +440,6 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 1. **Eventos de tarjeta sin consumidores.** `card.created` es el único que se consume; los demás se publican, pero todavía nadie los lee. Tampoco se crea historial en `state_transitions` para los cambios que no pasan por card-lifecycle, como el bloqueo automático por PIN.
 2. **Nada vence tarjetas.** `card.expired` existe y se publica cuando una tarjeta pasa a `EXPIRED`, pero solo se llega ahí con `PUT /status`: no hay un proceso que venza las tarjetas al llegar su fecha (`Card.expire()` no se usa y el evento `EXPIRE` de la state machine de card-lifecycle no tiene un caso de uso).
-3. **DLQ sin reproceso automático** (ver §5.3): reinyectar mensajes es manual y un corte largo de la base puede llenarla. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
+3. **Reproceso de la DLQ acotado** (ver §5.3): `DeadLetterRedriver` reinyecta los mensajes durante unos 31 min; si la causa dura más (o el mensaje es ilegible), quedan en la DLQ y hay que reinyectarlos a mano. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
 4. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
 5. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclinedEvent` con `responseCode` `59`; no hay un evento de fraude propio.
