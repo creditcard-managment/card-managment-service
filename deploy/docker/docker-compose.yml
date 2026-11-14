@@ -1,5 +1,3 @@
-version: '3.8'
-
 # =============================================================================
 # Card Management System - Docker Compose
 # =============================================================================
@@ -228,7 +226,10 @@ volumes:
 # =============================================================================
 # NETWORKS
 # =============================================================================
+# Red compartida con el compose de card-management-database (postgres, pgadmin, flyway), que declara la misma
+# red con el mismo nombre fijo: el primero que se levanta la crea y el otro la reutiliza, así no importa el orden.
+# Los servicios igual necesitan postgres con las migraciones aplicadas: levantar antes card-management-database.
 networks:
   card-network:
-    external: true
-    name: card-management-database_card-network
+    name: card-network
+    driver: bridge
