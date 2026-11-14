@@ -1,5 +1,6 @@
 package com.unisono.card.payment.infrastructure.config;
 
+import com.unisono.card.events.config.KafkaTopics;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -103,49 +104,49 @@ public class KafkaPaymentConfig {
 
     @Bean
     public NewTopic paymentInitiatedTopic(
-            @Value("${spring.kafka.topics.payment.initiated:payment.processing.initiated}") String topicName) {
+            @Value("${spring.kafka.topics.payment.initiated:" + KafkaTopics.PAYMENT_INITIATED + "}") String topicName) {
         return createTopic(topicName);
     }
 
     @Bean
     public NewTopic paymentAuthorizedTopic(
-            @Value("${spring.kafka.topics.payment.authorized:payment.processing.authorized}") String topicName) {
+            @Value("${spring.kafka.topics.payment.authorized:" + KafkaTopics.PAYMENT_AUTHORIZED + "}") String topicName) {
         return createTopic(topicName);
     }
 
     @Bean
     public NewTopic paymentProcessedTopic(
-            @Value("${spring.kafka.topics.payment.processed:payment.processing.completed}") String topicName) {
+            @Value("${spring.kafka.topics.payment.processed:" + KafkaTopics.PAYMENT_PROCESSED + "}") String topicName) {
         return createTopic(topicName);
     }
 
     @Bean
     public NewTopic paymentDeclinedTopic(
-            @Value("${spring.kafka.topics.payment.declined:payment.processing.declined}") String topicName) {
+            @Value("${spring.kafka.topics.payment.declined:" + KafkaTopics.PAYMENT_DECLINED + "}") String topicName) {
         return createTopic(topicName);
     }
 
     @Bean
     public NewTopic paymentReversedTopic(
-            @Value("${spring.kafka.topics.payment.reversed:payment.reversal.completed}") String topicName) {
+            @Value("${spring.kafka.topics.payment.reversed:" + KafkaTopics.PAYMENT_REVERSED + "}") String topicName) {
         return createTopic(topicName);
     }
 
     @Bean
     public NewTopic refundInitiatedTopic(
-            @Value("${spring.kafka.topics.refund.initiated:payment.refund.initiated}") String topicName) {
+            @Value("${spring.kafka.topics.refund.initiated:" + KafkaTopics.REFUND_INITIATED + "}") String topicName) {
         return createTopic(topicName);
     }
 
     @Bean
     public NewTopic refundProcessedTopic(
-            @Value("${spring.kafka.topics.refund.processed:payment.refund.processed}") String topicName) {
+            @Value("${spring.kafka.topics.refund.processed:" + KafkaTopics.REFUND_PROCESSED + "}") String topicName) {
         return createTopic(topicName);
     }
 
     @Bean
     public NewTopic transactionSettledTopic(
-            @Value("${spring.kafka.topics.transaction.settled:payment.settlement.completed}") String topicName) {
+            @Value("${spring.kafka.topics.transaction.settled:" + KafkaTopics.TRANSACTION_SETTLED + "}") String topicName) {
         return createTopic(topicName);
     }
 

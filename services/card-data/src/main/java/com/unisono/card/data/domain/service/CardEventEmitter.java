@@ -85,6 +85,12 @@ public class CardEventEmitter {
                     reason,
                     actor
             ));
+            case EXPIRED -> eventOutbox.enqueue(KafkaTopics.CARD_EXPIRED, cardId, new CardExpiredEvent(
+                    cardId,
+                    card.getExpiredAt() != null ? card.getExpiredAt() : now,
+                    reason,
+                    actor
+            ));
             default -> log.debug("No event defined for status {} (card {})", card.getStatus(), cardId);
         }
     }

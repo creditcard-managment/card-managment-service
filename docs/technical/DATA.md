@@ -540,8 +540,9 @@ Todas las consultas de `JpaCardRepository` (incluido el `findById` sobrescrito) 
 | `CardBlockedEvent` | `card.blocked` | → `BLOCKED` / `BLOCKED_FRAUD`, incluido el bloqueo automático por PIN | — |
 | `CardUnblockedEvent` | `card.unblocked` | Bloqueada → `ACTIVE` | — |
 | `CardCancelledEvent` | `card.cancelled` | → `CANCELLED` | — |
+| `CardExpiredEvent` | `card.expired` | → `EXPIRED` (`PUT /status`; también registra `expiredAt`) | — |
 
-Pasar a `EXPIRED` no publica ningún evento. Los contratos están en [EVENTS.md §4](EVENTS.md). Ejemplo de payload (JSON, sin headers de tipo):
+Hoy nada vence tarjetas automáticamente: `EXPIRED` solo se alcanza con `PUT /status`. Los contratos están en [EVENTS.md §4](EVENTS.md). Ejemplo de payload (JSON, sin headers de tipo):
 
 ```json
 {

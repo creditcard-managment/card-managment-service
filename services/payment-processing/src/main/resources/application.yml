@@ -55,21 +55,8 @@ spring:
       partitions: ${KAFKA_TOPIC_PARTITIONS:3}
       # Tiene que ser <= cantidad de brokers (docker-compose tiene uno solo: KAFKA_TOPIC_REPLICATION_FACTOR=1)
       replication-factor: ${KAFKA_TOPIC_REPLICATION_FACTOR:2}
-
-      payment:
-        initiated: payment.processing.initiated
-        authorized: payment.processing.authorized
-        processed: payment.processing.completed
-        declined: payment.processing.declined
-        reversed: payment.reversal.completed
-        default: payment.events
-
-      refund:
-        initiated: payment.refund.initiated
-        processed: payment.refund.processed
-
-      transaction:
-        settled: payment.settlement.completed
+      # Los nombres de los topics salen de KafkaTopics (card-events), el catálogo compartido.
+      # Se pueden pisar con spring.kafka.topics.payment.initiated, .refund.processed, etc.
 
 # Server Configuration
 server:

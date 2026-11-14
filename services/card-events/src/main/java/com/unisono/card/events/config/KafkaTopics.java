@@ -21,9 +21,10 @@ public final class KafkaTopics {
     public static final String CARD_BLOCKED = "card.blocked";
     public static final String CARD_UNBLOCKED = "card.unblocked";
     public static final String CARD_CANCELLED = "card.cancelled";
+    public static final String CARD_EXPIRED = "card.expired";
 
     // ========================================
-    // Topics de Credit Limits
+    // Topics de Credit Limits (sin productor: card-limits no publica eventos)
     // ========================================
 
     public static final String CREDIT_LIMIT_ASSIGNED = "credit-limit.assigned";
@@ -32,17 +33,25 @@ public final class KafkaTopics {
     public static final String CREDIT_LIMIT_RELEASED = "credit-limit.released";
 
     // ========================================
-    // Topics de Transacciones (futuro)
+    // Topics de payment-processing (los publica su outbox)
     // ========================================
 
-    public static final String TRANSACTION_AUTHORIZED = "transaction.authorized";
-    public static final String TRANSACTION_DECLINED = "transaction.declined";
-    public static final String TRANSACTION_REVERSED = "transaction.reversed";
+    public static final String PAYMENT_INITIATED = "payment.processing.initiated";
+    public static final String PAYMENT_AUTHORIZED = "payment.processing.authorized";
+    public static final String PAYMENT_PROCESSED = "payment.processing.completed";
+    public static final String PAYMENT_DECLINED = "payment.processing.declined";
+    public static final String PAYMENT_REVERSED = "payment.reversal.completed";
+    public static final String REFUND_INITIATED = "payment.refund.initiated";
+    public static final String REFUND_PROCESSED = "payment.refund.processed";
+    public static final String TRANSACTION_SETTLED = "payment.settlement.completed";
+    /** Destino de un evento de pago sin topic propio (no debería usarse) */
+    public static final String PAYMENT_DEFAULT = "payment.events";
 
     // ========================================
     // Dead Letter Queue (manejo de errores)
     // ========================================
 
     public static final String DLQ_CARD_EVENTS = "dlq.card-events";
+    /** Sin uso: card-limits no consume eventos */
     public static final String DLQ_LIMIT_EVENTS = "dlq.limit-events";
 }

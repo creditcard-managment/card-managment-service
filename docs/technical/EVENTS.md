@@ -69,17 +69,24 @@ Estado según el código actual de los servicios:
 | `CARD_BLOCKED` | `card.blocked` | `CardBlockedEvent` | card-data | — | ✅ Se publica |
 | `CARD_UNBLOCKED` | `card.unblocked` | `CardUnblockedEvent` | card-data | — | ✅ Se publica |
 | `CARD_CANCELLED` | `card.cancelled` | `CardCancelledEvent` | card-data | — | ✅ Se publica |
+| `CARD_EXPIRED` | `card.expired` | `CardExpiredEvent` | card-data | — | ✅ Se publica (nada vence tarjetas todavía, ver §10) |
 | `CREDIT_LIMIT_ASSIGNED` | `credit-limit.assigned` | `CreditLimitAssignedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_UPDATED` | `credit-limit.updated` | `CreditLimitUpdatedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_CONSUMED` | `credit-limit.consumed` | `CreditLimitConsumedEvent` | — | — | Contrato definido, sin uso |
 | `CREDIT_LIMIT_RELEASED` | `credit-limit.released` | — | — | — | Solo topic |
-| `TRANSACTION_AUTHORIZED` | `transaction.authorized` | — | — | — | Reservado (“futuro”) |
-| `TRANSACTION_DECLINED` | `transaction.declined` | — | — | — | Reservado |
-| `TRANSACTION_REVERSED` | `transaction.reversed` | — | — | — | Reservado |
+| `PAYMENT_INITIATED` | `payment.processing.initiated` | `PaymentInitiated` (payment-processing) | payment-processing | — | ✅ Se publica, ver §6 |
+| `PAYMENT_AUTHORIZED` | `payment.processing.authorized` | `PaymentAuthorized` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_PROCESSED` | `payment.processing.completed` | `PaymentProcessed` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_DECLINED` | `payment.processing.declined` | `PaymentDeclined` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_REVERSED` | `payment.reversal.completed` | `PaymentReversed` | payment-processing | — | ✅ Se publica |
+| `REFUND_INITIATED` | `payment.refund.initiated` | `RefundInitiated` | payment-processing | — | ✅ Se publica |
+| `REFUND_PROCESSED` | `payment.refund.processed` | `RefundProcessed` | payment-processing | — | ✅ Se publica |
+| `TRANSACTION_SETTLED` | `payment.settlement.completed` | `TransactionSettled` | payment-processing | — | ✅ Se publica |
+| `PAYMENT_DEFAULT` | `payment.events` | — | — | — | Destino de un evento de pago sin topic propio (no debería usarse) |
 | `DLQ_CARD_EVENTS` | `dlq.card-events` | Mensaje original, sin modificar | card-lifecycle | — | ✅ En uso, ver §5.3 |
 | `DLQ_LIMIT_EVENTS` | `dlq.limit-events` | — | — | — | Reservado: nadie consume eventos de límites |
 
-**Convención de nombres:** `<dominio>.<hecho-en-pasado>` en minúsculas, separado por punto (`card.created`, `credit-limit.assigned`). `payment-processing` usa su propia convención de tres niveles (`payment.processing.authorized`), ver §6.
+**Convención de nombres:** `<dominio>.<hecho-en-pasado>` en minúsculas, separado por punto (`card.created`, `credit-limit.assigned`). Los topics de pagos usan tres niveles (`payment.processing.authorized`), ver §6. `KafkaTopics` es el catálogo de todos los topics que existen: payment-processing toma de ahí los nombres de los suyos.
 
 ---
 
@@ -180,7 +187,18 @@ Se publica cuando `card-data` persiste una nueva solicitud de tarjeta (estado `R
 | `reason` | `String` |
 | `cancelledBy` | `String` |
 
-### 4.9 Eventos de límite de crédito (sin uso)
+### 4.9 `CardExpiredEvent` — `card.expired`
+
+| Campo | Tipo |
+|---|---|
+| `cardId` | `String` |
+| `expiredAt` | `LocalDateTime` |
+| `reason` | `String` |
+| `expiredBy` | `String` |
+
+`EXPIRED` es un estado final. Hoy solo se llega con `PUT /status`: ningún proceso vence tarjetas solo (ver §10).
+
+### 4.10 Eventos de límite de crédito (sin uso)
 
 Contratos definidos; `card-limits` todavía no los publica ni depende de esta librería ([LIMITS.md §9](LIMITS.md)). Los montos son `BigDecimal`.
 
@@ -237,7 +255,7 @@ sequenceDiagram
 | Tercer PIN incorrecto (`validate-pin`, `reset-pin`) | `card.blocked` (`NORMAL`), autor `system` |
 | `POST /unblock` | `card.unblocked` |
 | `POST /cancel`, `PUT /status` → `CANCELLED` | `card.cancelled` |
-| `PUT /status` → `EXPIRED` | Ninguno: no hay contrato ni topic para el vencimiento |
+| `PUT /status` → `EXPIRED` | `card.expired` (registra `expiredAt`) |
 
 ### 5.2 Configuración del productor (card-data)
 
@@ -268,7 +286,7 @@ sequenceDiagram
 | Reintentos | `card-lifecycle.kafka.retry.max-retries` (4) y `initial-interval-ms` (1000): 1 s, 2 s, 4 s y 8 s |
 | DLQ | `dlq.card-events`, con productor propio (`acks=all`, idempotente) |
 
-> Las propiedades `spring.kafka.consumer.value-deserializer`, `spring.json.trusted.packages` y `spring.json.value.default.type` del `application.yml` de `card-lifecycle` **no se aplican**, porque `KafkaConsumerConfig` define su propio `ConsumerFactory`.
+> `KafkaConsumerConfig` define su propio `ConsumerFactory`: del `application.yml` solo lee `spring.kafka.bootstrap-servers` y `spring.kafka.consumer.group-id`. Por eso el yml no declara deserializers ni propiedades `spring.json.*`.
 
 **Cuando un mensaje falla:**
 
@@ -318,7 +336,7 @@ docker exec -it card-management-kafka kafka-console-consumer \
 
 Características propias:
 
-- Los topics se configuran en `spring.kafka.topics.*` y `KafkaPaymentConfig` los declara como `NewTopic` (3 particiones, replication factor 2).
+- Los nombres de los topics salen de `KafkaTopics` (§3) y se pueden pisar con `spring.kafka.topics.*`. `KafkaPaymentConfig` los declara como `NewTopic` con 3 particiones y replication factor `KAFKA_TOPIC_REPLICATION_FACTOR`: 2 por defecto, 1 en docker-compose, que tiene un solo broker.
 - **Key = `cardId`**: todos los eventos implementan `PaymentEvent` (`getCardId()`), así que los de una tarjeta, y los de cada una de sus transacciones, quedan en la misma partición y en orden. Entrega *at-least-once*: deduplicar por `eventId`.
 - Los campos son Value Objects (`TransactionId`, `CardId`, `TransactionAmount`), así que en el JSON aparecen como objetos anidados (por ejemplo `"cardId": { "value": "…" }`), a diferencia de los eventos de tarjeta, que usan `String`.
 - **Ningún servicio consume estos topics** hoy.
@@ -378,11 +396,9 @@ docker exec -it card-management-kafka kafka-console-consumer \
 ## 10. Limitaciones conocidas y deuda técnica
 
 1. **Eventos de tarjeta sin consumidores.** `card.created` es el único que se consume; los demás se publican, pero todavía nadie los lee. Tampoco se crea historial en `state_transitions` para los cambios que no pasan por card-lifecycle, como el bloqueo automático por PIN.
-2. **Sin evento de vencimiento.** Pasar a `EXPIRED` no publica nada: no hay `card.expired` en el catálogo.
+2. **Nada vence tarjetas.** `card.expired` existe y se publica cuando una tarjeta pasa a `EXPIRED`, pero solo se llega ahí con `PUT /status`: no hay un proceso que venza las tarjetas al llegar su fecha (`Card.expire()` no se usa y el evento `EXPIRE` de la state machine de card-lifecycle no tiene un caso de uso).
 3. **DLQ sin reproceso automático** (ver §5.3): reinyectar mensajes es manual y un corte largo de la base puede llenarla. Del lado del productor, el outbox de card-data aparta los eventos con error permanente (`failed_at`) en su propia tabla.
 4. **Eventos de límite sin productor:** los contratos `CreditLimit*` existen, pero `card-limits` no los publica; `credit-limit.released` tiene topic, pero no clase.
 5. **Eventos de pago sin consumidores.** Un rechazo por fraude se informa como `PaymentDeclined` (código `59`); no hay un evento de fraude propio.
 6. **Eventos de pago no deserializables con sus propias clases:** no tienen `@JsonCreator` ni constructor vacío, así que un consumidor Java no puede leerlos con esas clases tal como están.
-7. **Replication factor 2 con un solo broker:** `KafkaPaymentConfig` declara los topics de pago con `replicas=2`, que el broker único del compose no puede satisfacer. La creación por `KafkaAdmin` falla; los topics terminan creándose por auto-creación con la configuración por defecto.
-8. **Convenciones mezcladas:** `KafkaTopics.TRANSACTION_*` (`transaction.authorized`) no coincide con los topics que realmente usa `payment-processing` (`payment.processing.authorized`); los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados.
-9. **Configuración ignorada en card-lifecycle:** las propiedades de deserialización del `application.yml` no se aplican (ver §5.3).
+7. **Formatos mezclados:** los eventos de tarjeta usan `String` y los de pago usan Value Objects anidados (ver el punto 6).
